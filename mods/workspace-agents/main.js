@@ -4,6 +4,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
+import { OmpChildren } from "./omp.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -100,12 +101,14 @@ export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu) return;
     this.folded = new Set();
+    this.expandedAgents = new Set();
     // Each agent's last state and when it changed (ms), kept across restarts.
     this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
     this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
+    this.omp = new OmpChildren(cx);
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -189,9 +192,6 @@ export default class Agents extends View {
         .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))));
   }
 
-  peek(addr) {
-    run("terminal.peek", { terminal: addr });
-  }
 
   // Live sub-agents of `addr`, depth first, each with the tree lines in front of it.
   tree(all, addr, lead = []) {
@@ -208,7 +208,8 @@ export default class Agents extends View {
   subRow(t, s, shown, compact, indent = 0) {
     const k = s.t;
     const st = kidStatus(k, this.listed);
-    const pic = icon(k.program, 14, t.foreground);
+    const program = k.program ?? (k.transcript ? agents().find(a => a.app === "omp" || a.program?.key === "omp")?.program : null);
+    const pic = icon(program, 14, t.foreground);
     const on = k.address === shown;
     return h_flex()
       .id(`sub-${k.address}`)
@@ -221,8 +222,6 @@ export default class Agents extends View {
       .items_center()
       .text_size(12.5)
       .when(on, (el) => el.bg(t.raised))
-      .hover((s) => s.bg(t.hover))
-      .on_click(() => this.peek(k.address))
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
@@ -249,7 +248,8 @@ export default class Agents extends View {
     const sort = sortOf();
     let list = agents();
     this.listed = new Map(list.map((a) => [a.address, a.status]));
-    const all = terminals();
+    this.omp.update(list, cx);
+    const all = [...terminals(), ...this.omp.nodes];
     this.migratePins(all);
     const shown = focused()?.agent;
     const now = Date.now();
@@ -303,7 +303,7 @@ export default class Agents extends View {
     const withKids = (a, i, indent = 0) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
       const r = row(a, i, subs, indent);
-      if (this.folded.has(a.address)) return [r];
+      if (!this.expandedAgents.has(a.address)) return [r];
       return [r, ...subs.map((s) => this.subRow(t, s, shown, byPriority, indent))];
     };
 
@@ -311,7 +311,7 @@ export default class Agents extends View {
     const fold = (a, subs) => {
       const sts = subs.map((s) => kidStatus(s.t, this.listed));
       const top = sts.reduce((m, s) => ((RANK[s] ?? 0) > (RANK[m] ?? 0) ? s : m), null);
-      const open = !this.folded.has(a.address);
+      const open = this.expandedAgents.has(a.address);
       return div()
         .id(`fold-${a.address}`)
         .h(18)
@@ -326,7 +326,7 @@ export default class Agents extends View {
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_click((_e, cx) => {
           cx.stop_propagation();
-          open ? this.folded.add(a.address) : this.folded.delete(a.address);
+          open ? this.expandedAgents.delete(a.address) : this.expandedAgents.add(a.address);
           cx.notify();
         })
         .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11).flex_none())
@@ -411,7 +411,7 @@ export default class Agents extends View {
         .when(Boolean(pic), el => el.child(div().id(`agent-fold-${a.address}`)
           .when(subs.length > 0, el => el.on_click((_e, cx) => {
             cx.stop_propagation();
-            this.folded.has(a.address) ? this.folded.delete(a.address) : this.folded.add(a.address);
+            this.expandedAgents.has(a.address) ? this.expandedAgents.delete(a.address) : this.expandedAgents.add(a.address);
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
@@ -496,6 +496,12 @@ export default class Agents extends View {
             ),
         ),
       )
+      .when(Boolean(this.omp.error) && !collapsed, el => el.child(h_flex().px(12).gap(8).items_center()
+        .child(div().flex_1().text_size(11).text_color(t.blocked).child(this.omp.error))
+        .child(div().id("dismiss-omp-error").px(6).py(4).cursor_pointer().text_color(t.muted)
+          .tooltip("Dismiss OMP discovery error")
+          .on_click((_event, cx) => { this.omp.error = null; cx.notify(); })
+          .child("×"))))
       .when(list.length === 0 && !collapsed, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
