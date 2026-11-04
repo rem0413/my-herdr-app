@@ -10,12 +10,14 @@ const I = (n) => `mods/file-menu/icons/${n}.svg`;
 const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 const base = (p = "") => p.split("/").pop();
 const parent = (p) => p.slice(0, p.lastIndexOf("/")) || "/";
+// Main menu and submenu width; Open in row top = 6 rows (30) + 1 separator (9) above it.
+const MENU_W = 250, OPEN_IN_TOP = 6 * 30 + 9;
 const DEFAULT_APPS = [{ name: "Cursor", app: "Cursor" }, { name: "VS Code", app: "Visual Studio Code" }, { name: "Sublime Text", app: "Sublime Text" }, { name: "Xcode", app: "Xcode" }];
 
 export default class FileMenu extends View {
   init(_p, cx) {
     this.p = props() ?? {};
-    this.view = "menu"; // menu | apps
+    this.sub = false; // Open in submenu shown (on hover)
     this.apps = DEFAULT_APPS;
     this.handle = cx.focus_handle(); this.handle.focus();
     cx.spawn(async (cx) => {
@@ -80,35 +82,45 @@ export default class FileMenu extends View {
 
   render(cx) {
     const t = theme(), { path, root, dir, on } = this.p, local = !on;
+    // set: on hover enter, open (true) or close (false) the submenu; rows hit-test exactly where the pointer is.
     const row = (id, icon, label, action, opts = {}) => h_flex().id(id).h(30).px(10).gap(10).items_center().rounded(6)
       .when(!opts.disabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => action(cx)))
+      .when(Boolean(opts.selected), (el) => el.bg(t.hover))
+      .when(opts.set !== undefined, (el) => el.on_hover((h, cx) => { if (h && this.sub !== opts.set) { this.sub = opts.set; cx.notify(); } }))
       .text_color(opts.disabled ? t.dim : opts.danger ? "#e06c75" : t.foreground)
       .child(svg(icon).size(15).flex_none())
       .child(div().flex_1().child(label))
       .when(Boolean(opts.hint), (el) => el.child(div().text_size(11).text_color(t.dim).child(opts.hint)));
     const sep = () => div().h(1).mx(6).my(4).bg(t.border);
-    const frame = (...kids) => v_flex().id("file-menu").track_focus(this.handle).p(5).w_full().bg(t.popover).text_size(13)
-      .on_key_down((e, cx) => { if (e.key === "escape") { this.view === "menu" ? this.close() : (this.view = "menu", cx.notify()); cx.stop_propagation(); } })
-      .children(kids);
+    // frame:"none" popup: we draw each panel's card; the submenu sits beside the main menu.
+    const card = (id, ...kids) => v_flex().id(id).w(MENU_W).flex_none().p(5).bg(t.popover).border_1().border_color(t.border).rounded(10).shadow_lg().children(kids);
 
-    if (this.view === "apps") {
-      return frame(row("apps-back", I("back"), "Open in", (cx) => { this.view = "menu"; cx.notify(); }), sep(),
-        ...this.apps.map((a, i) => row(`app-${i}`, a.icon ?? I("app"), a.name, (cx) => this.openIn(a, cx), { disabled: !local, hint: local ? null : "Local only" })),
-        sep(), row("apps-custom", I("rename"), "Customize apps…", () => { this.close(); this.openEditor(`${appHome()}/file-editor.json`); }));
-    }
+    // Hovering Open in opens the submenu, any other main row closes it; separators and the submenu keep it.
     const rel = root && path.startsWith(root + "/") ? path.slice(root.length + 1) : base(path);
-    return frame(
-      row("new-file", I("file-plus"), "New File", () => this.create("file")),
-      row("new-folder", I("folder-plus"), "New Folder", () => this.create("folder")),
+    const main = card("file-menu-main",
+      row("new-file", I("file-plus"), "New File", () => this.create("file"), { set: false }),
+      row("new-folder", I("folder-plus"), "New Folder", () => this.create("folder"), { set: false }),
       sep(),
-      row("copy-path", I("copy"), "Copy Path", (cx) => this.copy(path, cx)),
-      row("copy-rel", I("copy"), "Copy Relative Path", (cx) => this.copy(rel, cx)),
-      row("duplicate", I("duplicate"), "Duplicate", (cx) => this.duplicate(cx)),
-      row("download", I("download"), "Download", (cx) => this.download(cx), { disabled: local, hint: local ? "Remote only" : null }),
-      row("open-in", I("open-in"), "Open in", (cx) => { this.view = "apps"; cx.notify(); }, { hint: "›" }),
-      row("reveal", I("reveal"), "Reveal in Finder", (cx) => this.reveal(cx), { disabled: !local, hint: local ? null : "Local only" }),
+      row("copy-path", I("copy"), "Copy Path", (cx) => this.copy(path, cx), { set: false }),
+      row("copy-rel", I("copy"), "Copy Relative Path", (cx) => this.copy(rel, cx), { set: false }),
+      row("duplicate", I("duplicate"), "Duplicate", (cx) => this.duplicate(cx), { set: false }),
+      row("download", I("download"), "Download", (cx) => this.download(cx), { disabled: local, hint: local ? "Remote only" : null, set: false }),
+      row("open-in", I("open-in"), "Open in", (cx) => { this.sub = true; cx.notify(); }, { hint: "›", selected: this.sub, set: true }),
+      row("reveal", I("reveal"), "Reveal in Finder", (cx) => this.reveal(cx), { disabled: !local, hint: local ? null : "Local only", set: false }),
       sep(),
-      row("rename", I("rename"), "Rename", () => this.create("rename")),
-      row("delete", I("delete"), "Delete", () => { this.close(); openOverlay({ mod: "file-dialog", kind: "dialog", width: 560, props: { kind: "delete", path, dir, on, space: this.p.space } }); }, { danger: true }));
+      row("rename", I("rename"), "Rename", () => this.create("rename"), { set: false }),
+      row("delete", I("delete"), "Delete", () => { this.close(); openOverlay({ mod: "file-dialog", kind: "dialog", width: 560, props: { kind: "delete", path, dir, on, space: this.p.space } }); }, { danger: true, set: false }));
+    const apps = card("file-menu-apps",
+      // Hidden submenu is still laid out: ignore its clicks until it shows.
+      ...this.apps.map((a, i) => row(`app-${i}`, a.icon ?? I("app"), a.name, (cx) => this.sub && this.openIn(a, cx), { disabled: !local, hint: local ? null : "Local only" })),
+      sep(), row("apps-custom", I("rename"), "Customize apps…", () => { if (!this.sub) return; this.close(); this.openEditor(`${appHome()}/file-editor.json`); }));
+
+    // Fixed-size root (both columns, always): the popup is sized by content, so adding the submenu
+    // used to resize and move it, the pointer left Open in, the submenu closed, and it looped.
+    // The submenu column is always laid out and only hidden, so nothing moves.
+    return h_flex().id("file-menu").track_focus(this.handle).w(MENU_W * 2 + 4).items_start().gap(4).text_size(13)
+      .on_key_down((e, cx) => { if (e.key === "escape") { this.close(); cx.stop_propagation(); } })
+      .child(main)
+      .child(div().pt(OPEN_IN_TOP).when(!this.sub, (el) => el.invisible()).child(apps));
   }
 }

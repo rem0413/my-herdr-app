@@ -223,7 +223,7 @@ export default class Files extends View {
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
         .when(active, el => el.bg(t.selected))
         .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : openFile(this.context.space, `${this.root}/${path}`, this.on, icon))
-        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "file-menu", kind: "popup", width: 260, height: 380,
+        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "file-menu", kind: "popup", frame: "none", width: 510, height: 420,
           props: { path: `${this.root}/${path}`, root: this.root, dir: entry.dir, on: this.on, space: this.context.space } }); })
         .child(entry.dir ? svg(`mods/my-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(svg(icon.path).size(14).flex_none().text_color(icon.color ?? t.muted))
