@@ -7,7 +7,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, props, run, theme, home, appHome, exec, notify } from "herdr";
+import { panes, props, run, theme, home, appHome, exec, notify, shared } from "herdr";
 
 const quote = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
@@ -74,8 +74,12 @@ export default class Pane extends View {
     const t = theme();
     const p = this.me();
     if (!p) return div();
-    const name = ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
-    const pic = icon(p.program, 14, t.dim);
+    // file-editor panes: the file's name and folder (shared by file-editor), its git letter and unsaved dot.
+    const file = p.mod === "file-editor" ? Object.entries(shared("editor.tabs") ?? {}).find(([, id]) => id === p.tab)?.[0].split("|").slice(1).join("|") : null;
+    const edit = file ? (shared("editor.state") ?? {})[p.tab] : null;
+    const gitColor = edit?.git === "U" || edit?.git === "A" ? "#73c991" : edit?.git === "D" || edit?.git === "!" ? "#e06c75" : "#e5a54b";
+    const name = file ? file.split("/").pop() : ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
+    const pic = file ? svg("mods/my-files/file.svg").size(14).flex_none().text_color(t.dim) : icon(p.program, 14, t.dim);
     const st = p.status;
     const pane = p.pane;
     return h_flex()
@@ -92,8 +96,10 @@ export default class Pane extends View {
       .on_click(() => run("pane.focus", { pane }))
       .on_drop((e, cx) => this.drop(e.paths, cx))
       .when(Boolean(pic), (el) => el.child(pic))
-      .child(div().flex_none().truncate().max_w(260).font_medium().text_color(t.foreground).child(name))
-      .child(div().flex_1().truncate().text_color(t.dim).child(folder(p.cwd)))
+      .child(div().flex_none().truncate().max_w(260).font_medium().text_color(edit?.git ? gitColor : t.foreground).child(name))
+      .child(div().flex_1().truncate().text_color(t.dim).child(file ? folder(file.slice(0, file.lastIndexOf("/")) || "/") : folder(p.cwd)))
+      .when(Boolean(edit?.git), el => el.child(div().flex_none().text_color(gitColor).child(edit.git)))
+      .when(Boolean(edit?.dirty), el => el.child(div().size(7).flex_none().rounded(4).bg(t.foreground)))
       .when(this.busy > 0, el => el.child(div().flex_none().text_color(t.accent).child(`Uploading ${this.busy}…`)))
       .when(st === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
       .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")))
