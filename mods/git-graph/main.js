@@ -1,6 +1,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle, InputState, Input, Popover, h_resizable, v_resizable, resizable_panel } from "gpui-base";
 import { spaces, panes, focused, exec, theme, settings, props, run } from "herdr";
+import { treeRows } from "./tree.js";
 
 // Same folder resolution as the shipped Changes panel: the focused pane's repo.
 // Mod panes have no cwd: keep the last terminal's folder instead of jumping to the space folder.
@@ -80,7 +81,8 @@ function fmtDate(sec) {
 
 export default class GitGraph extends View {
   init(_props, cx) {
-    this.commits = []; this.width = 1; this.files = []; this.rows = []; this.repos = []; this.branches = []; this.remotes = [];
+    this.commits = []; this.width = 1; this.files = []; this.repos = []; this.branches = []; this.remotes = [];
+    this.view = localStorage.getItem("view") ?? "list"; this.collapsed = new Set();
     this.branch = null; this.showRemote = true; this.gen = 0; this.query = ""; this.matches = []; this.match = 0;
     this.scroll = VirtualListScrollHandle.new();
     this.colW = { date: 130, author: 110, commit: 76, ...JSON.parse(localStorage.getItem("cols") ?? "{}") };
@@ -99,7 +101,7 @@ export default class GitGraph extends View {
     const { cwd, on } = location(), context = key();
     if (context !== this.context) {
       this.context = context; this.repo = null; this.repos = []; this.commits = []; this.branch = null;
-      this.selected = null; this.file = null; this.rows = []; this.files = []; this.error = null; rediscover = true;
+      this.selected = null; this.files = []; this.error = null; rediscover = true;
     }
     if (!cwd) return;
     const gen = ++this.gen;
@@ -155,7 +157,7 @@ export default class GitGraph extends View {
     this.width = layoutGraph(commits) || 1;
     this.commits = commits; this.error = null;
     this.computeMatches();
-    if (this.selected && !commits.some((c) => c.hash === this.selected)) { this.selected = null; this.files = []; this.rows = []; }
+    if (this.selected && !commits.some((c) => c.hash === this.selected)) { this.selected = null; this.files = []; }
   }
 
   // Merges "main" + "origin/main" into one label, like vscode-git-graph.
@@ -196,8 +198,8 @@ export default class GitGraph extends View {
   }
 
   select(hash, cx) {
-    if (this.selected === hash) { this.selected = null; this.files = []; this.rows = []; this.file = null; cx.notify(); return; }
-    this.selected = hash; this.files = []; this.rows = []; this.file = null; this.body = ""; this.note = null;
+    if (this.selected === hash) { this.selected = null; this.files = []; cx.notify(); return; }
+    this.selected = hash; this.files = []; this.collapsed = new Set(); this.body = ""; this.note = null;
     cx.spawn(async (cx) => {
       const [msg, names] = await Promise.all([
         this.git(["show", "-s", "--format=%an <%ae>%n%ad%n%n%B", hash]),
@@ -217,18 +219,10 @@ export default class GitGraph extends View {
     cx.notify();
   }
 
+  // A file opens its side-by-side diff as a new tab (mod git-diff).
   openFile(path, cx) {
-    const hash = this.selected;
-    if (this.file === path) { this.file = null; this.rows = []; cx.notify(); return; }
-    this.file = path; this.rows = [];
-    cx.spawn(async (cx) => {
-      const r = await this.git(["diff-tree", "--root", "-m", "--first-parent", "-p", "--no-commit-id", "--no-color", "--no-ext-diff", hash, "--", path]);
-      if (this.selected !== hash || this.file !== path) return;
-      const all = r.stdout.replace(/\n$/, "").split("\n"), first = all.findIndex((l) => l.startsWith("@@"));
-      this.rows = (first < 0 ? ["No text diff"] : all.slice(first)).slice(0, 3000).map((l) => (l.length > 2000 ? l.slice(0, 2000) + "…" : l));
-      cx.notify();
-    });
-    cx.notify();
+    try { run("tab.new", { name: base(path), mod: "git-diff", props: { repo: this.repo, on: this.on, hash: this.selected, path } }); }
+    catch (e) { this.note = String(e); cx.notify(); }
   }
 
   // Writes (checkout, fetch) skip READ: they are meant to touch .git.
@@ -336,13 +330,6 @@ export default class GitGraph extends View {
     cx.notify();
   }
 
-  diffRow(line, t) {
-    const k = line[0];
-    return div().w_full().h(18).flex_none().px(10).truncate()
-      .when(k === "+", (e) => e.bg(t.ansi2 + "18")).when(k === "-", (e) => e.bg(t.ansi1 + "18"))
-      .when(k === "@", (e) => e.bg(t.raised).text_color(t.dim)).child(line || " ");
-  }
-
   dropdown(id, text, items, current, pick, t) {
     return Popover.new(id).open(this.menu === id).on_open_change((open, cx) => { this.menu = open ? id : null; cx.notify(); })
       .trigger(h_flex().id(`${id}-trigger`).h(26).min_w(120).max_w(240).px(8).gap(6).items_center().rounded(6).cursor_pointer()
@@ -357,17 +344,17 @@ export default class GitGraph extends View {
             .child(div().flex_1().min_w(0).truncate().text_color(it.dim ? t.muted : t.foreground).child(it.label)))));
   }
 
-  iconButton(id, icon, title, onClick, t, { active = false, spin = false } = {}) {
+  iconButton(id, icon, title, onClick, t, { active = false, spin = false, pulse = false } = {}) {
     const glyph = svg(ICON + icon).size(15);
     return div().id(id).w(26).h(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
-      .text_color(active ? t.foreground : t.muted).when(active, (e) => e.bg(t.selected))
+      .text_color(active || pulse ? t.foreground : t.muted).when(active, (e) => e.bg(t.selected))
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => onClick(cx))
-      .child(spin ? glyph.spin(900) : glyph);
+      .child(spin ? glyph.spin(900) : pulse ? div().loop("opacity", { from: 0.25, to: 1, period: 900 }).child(glyph) : glyph);
   }
 
   reload(cx, change) {
     change();
-    this.selected = null; this.file = null; this.files = []; this.rows = []; this.commits = [];
+    this.selected = null; this.files = []; this.commits = [];
     this.refresh(cx, { force: true });
     cx.notify();
   }
@@ -398,10 +385,7 @@ export default class GitGraph extends View {
           if (this.finding) this.find.focus(); else { this.find.set_value(""); this.query = ""; this.matches = []; }
           cx.notify();
         }, t, { active: this.finding }))
-        .child(this.iconButton("gg-term", "terminal.svg", "Terminal", (cx) => {
-          try { run("terminal.open", { folder: this.repo, place: "tab" }); } catch (e) { this.note = String(e); cx.notify(); }
-        }, t))
-        .child(this.iconButton("gg-fetch", "fetch.svg", "Fetch", (cx) => this.write(["fetch", "--all", "--prune"], "Fetched", cx), t, { spin: this.busy === "fetch" }))
+        .child(this.iconButton("gg-fetch", "fetch.svg", "Fetch", (cx) => this.write(["fetch", "--all", "--prune"], "Fetched", cx), t, { pulse: this.busy === "fetch" }))
         .child(this.iconButton("gg-refresh", "refresh.svg", "Refresh", (cx) => this.refresh(cx, { rediscover: true, force: true }), t, { spin: this.loading })));
   }
 
@@ -431,17 +415,33 @@ export default class GitGraph extends View {
       .child(h_resizable("gg-details").flex_1().min_h(0)
         .child(resizable_panel().size(cols.graph + 200).size_range(120, 900).child(div().id("commit-body").size_full().overflow_y_scrollbar().p(10)
           .text_size(12).text_color(t.muted).whitespace_normal().child(this.body || "…")))
-        .child(resizable_panel().size_range(160).child(v_flex().size_full().min_w(0)
-          .child(v_flex().id("commit-files").flex_none().max_h(this.file ? 120 : 9999).when(!this.file, (e) => e.flex_1()).overflow_y_scrollbar().p(4)
-            .children(this.files.map((f) => h_flex().id(`f-${f.path}`).h(24).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer()
-              .when(this.file === f.path, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.openFile(f.path, cx))
-              .child(div().w(12).text_size(11).text_color(color(f.status)).child(f.status))
-              .child(div().flex_1().min_w(0).truncate().text_size(12).child(f.path)))))
-          .when(Boolean(this.file), (e) => e.child(div().flex_1().min_h(0).relative().border_t(1).border_color(t.border)
-            .font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
-            .child(v_virtual_list("gg-diff", this.rows.length, 18, (i) => String(i),
-              (range) => this.rows.slice(range.start, range.end).map((l) => this.diffRow(l, t))).size_full())
-            .child(Scrollbar.vertical("gg-diff").viewport_from_layout().absolute().inset_0()))))));
+        .child(resizable_panel().size_range(160).child(this.fileList(t, color))));
+  }
+
+  fileList(t, color) {
+    const tree = this.view === "tree";
+    const rows = tree ? treeRows(this.files, this.collapsed) : this.files.map((f) => ({ file: f, depth: 0 }));
+    const viewButton = (id, label) => div().id(`gg-view-${id}`).px(8).h(22).flex().items_center().rounded(5).cursor_pointer().text_size(11)
+      .bg(this.view === id ? t.selected : t.background).text_color(this.view === id ? t.foreground : t.muted).hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { this.view = id; localStorage.setItem("view", id); cx.notify(); }).child(label);
+    return v_flex().size_full().min_w(0)
+      .child(h_flex().flex_none().h(30).px(8).gap(6).items_center().border_b(1).border_color(t.border)
+        .child(div().flex_1().text_size(11).text_color(t.dim).child(`${this.files.length} files`))
+        .child(h_flex().gap(2).child(viewButton("list", "List")).child(viewButton("tree", "Tree"))))
+      .child(v_flex().id("commit-files").flex_1().min_h(0).overflow_y_scrollbar().p(4)
+        .children(rows.map((r) => {
+          const row = h_flex().id(`f-${r.dir ? "d:" + r.path : r.file.path}`).h(24).flex_none().pl(8 + r.depth * 14).pr(8).gap(6)
+            .items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover));
+          if (r.dir) return row.on_click((_e, cx) => { this.collapsed.has(r.path) ? this.collapsed.delete(r.path) : this.collapsed.add(r.path); cx.notify(); })
+            .child(svg(`mods/files/chevron-${this.collapsed.has(r.path) ? "right" : "down"}.svg`).size(12).text_color(t.muted))
+            .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(r.name));
+          const f = r.file, dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/") + 1) : "";
+          return row.on_click((_e, cx) => this.openFile(f.path, cx))
+            .child(div().w(12).flex_none().text_size(11).text_color(color(f.status)).child(f.status))
+            .child(h_flex().flex_1().min_w(0).text_size(12)
+              .when(!tree && Boolean(dir), (e) => e.child(div().min_w(0).truncate().text_color(t.dim).child(dir)))
+              .child(div().flex_none().max_w(260).truncate().child(r.name)));
+        })));
   }
 
   render(cx) {
@@ -470,7 +470,7 @@ export default class GitGraph extends View {
         // Drag the divider to resize the details pane; GPUI keeps the sizes under "gg-split".
         ? v_resizable("gg-split").flex_1().min_h(0)
           .child(resizable_panel().size_range(80).child(list))
-          .child(resizable_panel().size(this.file ? 420 : 260).size_range(120).child(details))
+          .child(resizable_panel().size(260).size_range(120).child(details))
         : div().flex_1().min_h(0).child(list));
   }
 }
