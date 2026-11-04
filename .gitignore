@@ -10,7 +10,7 @@
 # Personal layouts only
 !/layouts/
 /layouts/*
-!/layouts/main-ports.json
+!/layouts/main-layout.json
 
 # Personal mods only
 !/mods/
