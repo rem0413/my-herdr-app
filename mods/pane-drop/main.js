@@ -7,7 +7,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, props, run, theme, home, appHome, exec, notify, shared } from "herdr";
+import { panes, props, run, theme, home, appHome, exec, notify, shared, openOverlay } from "herdr";
 
 const quote = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
@@ -56,7 +56,8 @@ export default class Pane extends View {
     return panes().find((p) => p.pane === props()?.pane);
   }
 
-  button(t, id, icon, command, args) {
+  // action: instead of run(command, args) (an unsaved editor pane asks first).
+  button(t, id, icon, command, args, action) {
     return div()
       .id(id)
       .p(3)
@@ -65,7 +66,7 @@ export default class Pane extends View {
       .hover((s) => s.bg(t.hover).text_color(t.foreground))
       .on_click((_e, cx) => {
         cx.stop_propagation();
-        run(command, args);
+        action ? action() : run(command, args);
       })
       .child(svg(`mods/pane-drop/${icon}.svg`).size(14));
   }
@@ -79,7 +80,7 @@ export default class Pane extends View {
     const edit = file ? (shared("editor.state") ?? {})[p.tab] : null;
     const gitColor = edit?.git === "U" || edit?.git === "A" ? "#73c991" : edit?.git === "D" || edit?.git === "!" ? "#e06c75" : "#e5a54b";
     const name = file ? file.split("/").pop() : ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
-    const pic = file ? svg("mods/my-files/file.svg").size(14).flex_none().text_color(t.dim) : icon(p.program, 14, t.dim);
+    const pic = file ? svg(edit?.icon?.path ?? "mods/my-files/icons/file.svg").size(14).flex_none().text_color(edit?.icon?.color ?? t.dim) : icon(p.program, 14, t.dim);
     const st = p.status;
     const pane = p.pane;
     return h_flex()
@@ -108,6 +109,8 @@ export default class Pane extends View {
         .child(this.button(t, `ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }))
         .child(this.button(t, `ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane }))
         .child(this.button(t, `ph-z-${pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }))
-        .child(this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane })));
+        .child(edit?.dirty
+          ? this.button(t, `ph-x-${pane}`, "close", "mod.open", null, () => openOverlay({ mod: "file-dialog", kind: "dialog", width: 560, props: { kind: "unsaved", path: file, tab: p.tab } }))
+          : this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane })));
   }
 }

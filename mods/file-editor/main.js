@@ -3,9 +3,9 @@
 // shared("editor.state"): { tabId: { dirty, git } } (tabs-graph draws the dot and git letter).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { readTextFile, writeTextFile, exec, props, panes, theme, settings, shared, setShared, notify } from "herdr";
+import { readTextFile, writeTextFile, exec, props, panes, theme, settings, shared, setShared, notify, appHome, run } from "herdr";
+import { language, syntaxFor } from "./lang.js";
 
-const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
 const base = (p) => p.split(/[\\/]/).pop();
 const dir = (p) => p.slice(0, p.length - base(p).length - 1) || "/";
 
@@ -34,9 +34,17 @@ async function gitMark(path, on) {
 export default class FileEditor extends View {
   init(_p, cx) {
     const p = props() ?? {};
-    this.file = p.file; this.on = p.on ?? null; this.space = p.space;
+    this.file = p.file; this.on = p.on ?? null; this.space = p.space; this.icon = p.icon ?? null;
     this.dirty = false;
     if (this.file) { this.load(cx); this.refreshGit(cx); cx.timer.every(5000, (cx) => this.refreshGit(cx)); }
+    // file-dialog's Save on "Unsaved changes": save this tab, then close it.
+    cx.timer.every(150, (cx) => {
+      const req = shared("editor.saveClose");
+      if (!req || req.tab !== this.tab || req.at === this.savedCloseAt) return;
+      this.savedCloseAt = req.at;
+      setShared("editor.saveClose", null);
+      this.save(cx, () => run("tab.close", { id: this.tab, confirmed: true }));
+    });
   }
 
   close() { this.state?.release(); this.publish({ drop: true }); }
@@ -53,7 +61,7 @@ export default class FileEditor extends View {
   publish({ drop } = {}) {
     if (!this.tab) return;
     const all = { ...(shared("editor.state") ?? {}) };
-    if (drop) delete all[this.tab]; else all[this.tab] = { dirty: this.dirty, git: this.git ?? "" };
+    if (drop) delete all[this.tab]; else all[this.tab] = { dirty: this.dirty, git: this.git ?? "", icon: this.icon };
     const before = JSON.stringify((shared("editor.state") ?? {})[this.tab] ?? null);
     if (before !== JSON.stringify(all[this.tab] ?? null)) setShared("editor.state", all);
   }
@@ -68,17 +76,20 @@ export default class FileEditor extends View {
   load(cx) {
     cx.spawn(async (cx) => {
       try {
-        const text = await readTextFile(this.file, { on: this.on });
+        const [text, cfgText] = await Promise.all([readTextFile(this.file, { on: this.on }), readTextFile(`${appHome()}/file-editor.json`).catch(() => null)]);
+        let cfg = {};
+        try { cfg = cfgText ? JSON.parse(cfgText) : {}; } catch (e) { notify({ title: "file-editor.json is invalid", body: String(e), level: "error" }); }
         if (text === null) this.error = "File not found";
         else if (text.includes("\0")) this.error = "Binary file · cannot edit";
         else {
-          const t = theme(), ext = this.file.includes(".") ? this.file.split(".").pop() : "txt";
+          const t = theme();
           // ponytail: >150 KB opens as plain text without folding; highlighting re-parses per keystroke and lags.
           this.plain = text.length > 150000;
           this.original = text;
-          this.state = EditorState.new({ language: this.plain ? "text" : LANG[ext] ?? ext, folding: !this.plain, value: text,
-            font_family: settings().font_family, font_size: 13,
-            syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } });
+          const lang = this.plain ? "text" : language(this.file, text, cfg.languages);
+          const fallback = { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 };
+          this.state = EditorState.new({ language: lang, folding: !this.plain, value: text,
+            font_family: settings().font_family, font_size: 13, syntax: { ...fallback, ...syntaxFor(lang, cfg) } });
           // ponytail: no full-text compare per keystroke (slow on big files); undo back to original stays dirty.
           this.state.on("change", (_e, cx) => { if (!this.dirty) { this.dirty = true; this.publish(); cx.notify(); } });
         }
@@ -87,8 +98,10 @@ export default class FileEditor extends View {
     });
   }
 
-  save(cx) {
-    if (!this.state || !this.dirty || this.saving) return;
+  // then: runs after a successful save (or at once when there is nothing to save).
+  save(cx, then) {
+    if (!this.state || !this.dirty) return then?.();
+    if (this.saving) return;
     const text = this.state.value();
     this.saving = true;
     cx.spawn(async (cx) => {
@@ -96,6 +109,7 @@ export default class FileEditor extends View {
         if (this.on) await writeRemote(this.file, text, this.original, this.on);
         else await writeTextFile(this.file, text, this.original);
         this.original = text; this.dirty = false; this.publish();
+        then?.();
         this.refreshGit(cx);
       } catch (e) {
         notify({ title: `Not saved: ${base(this.file)}`, body: String(e), level: "error" });

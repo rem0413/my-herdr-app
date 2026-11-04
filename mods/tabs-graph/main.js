@@ -2,6 +2,12 @@ import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
 
+// Editor tabs with unsaved changes ask first (file-dialog); everything else closes as before.
+function closeTab(id, edit) {
+  const file = edit?.dirty && Object.entries(shared("editor.tabs") ?? {}).find(([, t]) => t === id)?.[0].split("|").slice(1).join("|");
+  if (file) openOverlay({ mod: "file-dialog", kind: "dialog", width: 560, props: { kind: "unsaved", path: file, tab: id } });
+  else run("tab.close", { id });
+}
 function find(node, id) {
   if (node?.id === id) return node;
   for (const child of node?.children ?? []) {
@@ -69,13 +75,13 @@ export default class Tabs extends View {
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
         .when(Boolean(program?.icon) && !edit, el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
-        .when(Boolean(edit), el => el.child(svg("mods/my-files/file.svg").size(13).text_color(edit.git ? gitColor : t.muted)))
+        .when(Boolean(edit), el => el.child(svg(edit.icon?.path ?? "mods/my-files/icons/file.svg").size(13).text_color(edit.icon?.color ?? t.muted)))
         .child(div().max_w(170).truncate().when(Boolean(edit?.git), el => el.text_color(gitColor)).child(c.zoomed ? `${name} Z` : name))
         .when(Boolean(edit?.git), el => el.child(div().text_size(11).text_color(gitColor).child(edit.git)))
         .when(Boolean(edit?.dirty), el => el.child(div().size(7).rounded(4).bg(t.foreground)))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
-        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
+        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); closeTab(c.id, edit); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.

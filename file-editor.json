@@ -1,0 +1,75 @@
+{
+  "//": "Look of the file editor (mods/file-editor) and Files icons (mods/my-files). Colors: #rrggbb. Syntax changes apply to files opened after saving; icons apply live.",
+
+  "syntax": {
+    "//": "Keys the editor honors (tested): keyword boolean string string.escape number comment function type constant variable operator punctuation. Others are ignored.",
+    "keyword": "#CC7832",
+    "boolean": "#CC7832",
+    "string": "#6A8759",
+    "string.escape": "#CC7832",
+    "number": "#6897BB",
+    "comment": "#808080",
+    "function": "#FFC66D",
+    "type": "#7A9EC2",
+    "constant": "#9876AA",
+    "variable": "#A9B7C6",
+    "operator": "#A9B7C6",
+    "punctuation": "#A9B7C6"
+  },
+
+  "languageSyntax": {
+    "//": "What each key colors there: html/xml string = attribute values, constant = entities, punctuation = < > =; tag and attribute names cannot be colored. css type = property names, constant = hex colors, keyword = !important; selectors cannot be colored. json/yaml string = keys and values alike.",
+    "html": { "punctuation": "#E8BF6A" },
+    "xml": { "punctuation": "#E8BF6A" },
+    "css": { "type": "#9E7BB0", "constant": "#6897BB" },
+    "json": { "constant": "#CC7832" }
+  },
+
+  "languages": {
+    "//": "extension or file name -> editor language; beats auto-detection. js json yaml html xml css python rust go bash sql java c lua ruby",
+    "gradle": "java"
+  },
+
+  "openWith": [
+    { "name": "Cursor", "app": "Cursor", "icon": "icons/cursor.svg" },
+    { "name": "VS Code", "app": "Visual Studio Code" },
+    { "name": "Sublime Text", "app": "Sublime Text" },
+    { "name": "Xcode", "app": "Xcode" },
+    { "name": "Android Studio", "app": "Android Studio" }
+  ],
+
+  "icons": {
+    "//": "icon: a name in mods/my-files/icons (code json text image config terminal data lock media file) or a path from ~/.config/herdr-app",
+    "default": { "icon": "file", "color": "#8C8C8C" },
+    "folder": { "icon": "folder", "color": "#8C8C8C" },
+    "extensions": {
+      "js": { "icon": "code", "color": "#E8BF6A" }, "mjs": { "icon": "code", "color": "#E8BF6A" }, "cjs": { "icon": "code", "color": "#E8BF6A" }, "jsx": { "icon": "code", "color": "#61DAFB" },
+      "ts": { "icon": "code", "color": "#3178C6" }, "tsx": { "icon": "code", "color": "#3178C6" }, "mts": { "icon": "code", "color": "#3178C6" }, "d.ts": { "icon": "code", "color": "#5A8DCC" },
+      "json": { "icon": "json", "color": "#CBCB41" }, "jsonc": { "icon": "json", "color": "#CBCB41" }, "meta": { "icon": "json", "color": "#8C8C8C" },
+      "prefab": { "icon": "data", "color": "#4FA3D1" }, "scene": { "icon": "data", "color": "#4FA3D1" }, "fire": { "icon": "data", "color": "#4FA3D1" }, "anim": { "icon": "media", "color": "#4FA3D1" },
+      "yaml": { "icon": "config", "color": "#CB4B16" }, "yml": { "icon": "config", "color": "#CB4B16" }, "toml": { "icon": "config", "color": "#9C4221" }, "ini": { "icon": "config", "color": "#8C8C8C" },
+      "xml": { "icon": "code", "color": "#E37933" }, "plist": { "icon": "code", "color": "#E37933" }, "html": { "icon": "code", "color": "#E44D26" }, "vue": { "icon": "code", "color": "#41B883" }, "svelte": { "icon": "code", "color": "#FF3E00" },
+      "css": { "icon": "code", "color": "#563D7C" }, "scss": { "icon": "code", "color": "#CF649A" }, "less": { "icon": "code", "color": "#1D365D" },
+      "md": { "icon": "text", "color": "#519ABA" }, "txt": { "icon": "text", "color": "#8C8C8C" }, "log": { "icon": "text", "color": "#8C8C8C" },
+      "py": { "icon": "code", "color": "#3572A5" }, "rs": { "icon": "code", "color": "#DEA584" }, "go": { "icon": "code", "color": "#00ADD8" }, "java": { "icon": "code", "color": "#B07219" },
+      "kt": { "icon": "code", "color": "#A97BFF" }, "cs": { "icon": "code", "color": "#68217A" }, "c": { "icon": "code", "color": "#555555" }, "h": { "icon": "code", "color": "#A074C4" },
+      "cpp": { "icon": "code", "color": "#F34B7D" }, "lua": { "icon": "code", "color": "#000080" }, "rb": { "icon": "code", "color": "#701516" }, "sql": { "icon": "data", "color": "#E38C00" },
+      "sh": { "icon": "terminal", "color": "#89E051" }, "bash": { "icon": "terminal", "color": "#89E051" }, "zsh": { "icon": "terminal", "color": "#89E051" }, "fish": { "icon": "terminal", "color": "#89E051" },
+      "png": { "icon": "image", "color": "#A074C4" }, "jpg": { "icon": "image", "color": "#A074C4" }, "jpeg": { "icon": "image", "color": "#A074C4" }, "gif": { "icon": "image", "color": "#A074C4" }, "webp": { "icon": "image", "color": "#A074C4" }, "svg": { "icon": "image", "color": "#FFB13B" },
+      "mp3": { "icon": "media", "color": "#A074C4" }, "wav": { "icon": "media", "color": "#A074C4" }, "mp4": { "icon": "media", "color": "#A074C4" },
+      "lock": { "icon": "lock", "color": "#8C8C8C" }, "env": { "icon": "config", "color": "#ECD53F" }
+    },
+    "names": {
+      "package.json": { "icon": "json", "color": "#CB3837" }, "tsconfig.json": { "icon": "json", "color": "#3178C6" }, "jsconfig.json": { "icon": "json", "color": "#E8BF6A" },
+      "Dockerfile": { "icon": "terminal", "color": "#2496ED" }, "Makefile": { "icon": "terminal", "color": "#6D8086" },
+      ".gitignore": { "icon": "config", "color": "#F14E32" }, ".env": { "icon": "config", "color": "#ECD53F" },
+      "README.md": { "icon": "text", "color": "#519ABA" }, "AGENTS.md": { "icon": "text", "color": "#D97757" }, "CLAUDE.md": { "icon": "text", "color": "#D97757" },
+      "yarn.lock": { "icon": "lock", "color": "#2C8EBB" }, "package-lock.json": { "icon": "lock", "color": "#CB3837" }, "bun.lock": { "icon": "lock", "color": "#F9F1E1" }
+    },
+    "folders": {
+      "src": "#4FA3D1", "assets": "#E8BF6A", "scripts": "#E8BF6A", "test": "#89E051", "tests": "#89E051",
+      "node_modules": "#6D8086", "dist": "#6D8086", "build": "#6D8086", "library": "#6D8086", "temp": "#6D8086",
+      "docs": "#519ABA", "mods": "#A074C4", ".github": "#8C8C8C"
+    }
+  }
+}
