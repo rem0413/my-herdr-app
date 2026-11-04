@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle, InputState, Input, Popover, h_resizable, v_resizable, resizable_panel } from "gpui-base";
-import { spaces, panes, focused, exec, theme, settings, props, run } from "herdr";
+import { spaces, panes, focused, exec, theme, settings, props, run, shared, setShared } from "herdr";
 import { treeRows } from "./tree.js";
 
 // Same folder resolution as the shipped Changes panel: the focused pane's repo.
@@ -219,10 +219,15 @@ export default class GitGraph extends View {
     cx.notify();
   }
 
-  // A file opens its side-by-side diff as a new tab (mod git-diff).
+  // One preview tab: the first click opens it, later clicks load another file into it (no new tabs).
+  // git-diff records the preview tab's id in shared("git-diff.previewTab") when it starts.
   openFile(path, cx) {
-    try { run("tab.new", { name: base(path), mod: "git-diff", props: { repo: this.repo, on: this.on, hash: this.selected, path } }); }
-    catch (e) { this.note = String(e); cx.notify(); }
+    const name = base(path), tab = shared("git-diff.previewTab"), alive = tab && spaces().some((s) => s.tabs.some((x) => x.id === tab));
+    try {
+      setShared("git-diff.preview", { repo: this.repo, on: this.on, hash: this.selected, path });
+      if (alive) { run("tab.rename", { id: tab, name }); run("tab.select", { id: tab }); }
+      else run("tab.new", { name, mod: "git-diff" });
+    } catch (e) { this.note = String(e); cx.notify(); }
   }
 
   // Writes (checkout, fetch) skip READ: they are meant to touch .git.
