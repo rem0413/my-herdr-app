@@ -420,14 +420,14 @@ export default class GitGraph extends View {
 
   fileList(t, color) {
     const tree = this.view === "tree";
-    const rows = tree ? treeRows(this.files, this.collapsed) : this.files.map((f) => ({ file: f, depth: 0 }));
-    const viewButton = (id, label) => div().id(`gg-view-${id}`).px(8).h(22).flex().items_center().rounded(5).cursor_pointer().text_size(11)
-      .bg(this.view === id ? t.selected : t.background).text_color(this.view === id ? t.foreground : t.muted).hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => { this.view = id; localStorage.setItem("view", id); cx.notify(); }).child(label);
+    const rows = tree ? treeRows(this.files, this.collapsed) : this.files.map((f) => ({ file: f, name: base(f.path), depth: 0 }));
     return v_flex().size_full().min_w(0)
       .child(h_flex().flex_none().h(30).px(8).gap(6).items_center().border_b(1).border_color(t.border)
         .child(div().flex_1().text_size(11).text_color(t.dim).child(`${this.files.length} files`))
-        .child(h_flex().gap(2).child(viewButton("list", "List")).child(viewButton("tree", "Tree"))))
+        // One toggle: shows the icon of the view it switches to.
+        .child(this.iconButton("gg-view", tree ? "list.svg" : "tree.svg", tree ? "List" : "Tree", (cx) => {
+          this.view = tree ? "list" : "tree"; localStorage.setItem("view", this.view); cx.notify();
+        }, t)))
       .child(v_flex().id("commit-files").flex_1().min_h(0).overflow_y_scrollbar().p(4)
         .children(rows.map((r) => {
           const row = h_flex().id(`f-${r.dir ? "d:" + r.path : r.file.path}`).h(24).flex_none().pl(8 + r.depth * 14).pr(8).gap(6)
