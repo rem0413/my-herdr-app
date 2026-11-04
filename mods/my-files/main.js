@@ -87,6 +87,12 @@ export default class Files extends View {
   async loadFolder(path, context) {
     const { on, cwd: root } = context;
     const entries = await directory(path ? `${root}/${path}` : root, on);
+    if (entries.length) {
+      // Git handles nested rules, negations, global excludes and tracked files.
+      const ignored = await exec("git", ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z", "--", ...entries.map(entry => `:(literal)${entry.name}`)], { cwd: path ? `${root}/${path}` : root, on }).catch(() => null);
+      const names = new Set(ignored?.code === 0 ? ignored.stdout.split("\0").map(name => name.replace(/\/$/, "")) : []);
+      for (const entry of entries) entry.ignored = names.has(".") || names.has(entry.name);
+    }
     if (!this.current(context) || (path && !this.folders.has(path))) return;
     const used = [...this.entries.entries()].filter(([p]) => p !== path).reduce((n, [, e]) => n + e.length, 0);
     this.entries.set(path, entries.slice(0, Math.max(0, Math.min(PER_FOLDER, TOTAL - used))).sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name)));
@@ -218,7 +224,7 @@ export default class Files extends View {
       if (this.edit?.kind === "rename" && this.edit.path === `${this.root}/${path}`) { out.push(this.editRow(depth, t)); continue; }
       const active = !entry.dir && this.shown === `${this.root}/${path}`;
       const color = mark === "U" || mark === "A" ? "#73c991" : mark === "D" || mark === "!" ? "#e06c75" : "#e5a54b";
-      // Icon keeps its file-type color; the name takes the git color.
+      // Ignored entries mute both the file-type icon and the name.
       const icon = iconFor(entry.name, entry.dir, this.config);
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
         .when(active, el => el.bg(t.selected))
@@ -226,8 +232,8 @@ export default class Files extends View {
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "file-menu", kind: "popup", frame: "none", width: 510, height: 420,
           props: { path: `${this.root}/${path}`, root: this.root, dir: entry.dir, on: this.on, space: this.context.space } }); })
         .child(entry.dir ? svg(`mods/my-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
-        .child(svg(icon.path).size(14).flex_none().text_color(icon.color ?? t.muted))
-        .child(div().flex_1().min_w(0).truncate().text_color(mark ? color : t.foreground).child(entry.name))
+        .child(svg(icon.path).size(14).flex_none().text_color(entry.ignored ? t.dim : icon.color ?? t.muted))
+        .child(div().flex_1().min_w(0).truncate().text_color(entry.ignored ? t.dim : mark ? color : t.foreground).when(entry.ignored, el => el.italic()).child(entry.name))
         .when(Boolean(mark), el => el.child(div().text_size(11).text_color(color).child(mark))));
       if (entry.dir && open) this.rows(path, depth + 1, out, t);
     }
