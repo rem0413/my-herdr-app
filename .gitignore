@@ -18,7 +18,6 @@
 !/mods/agent-resume
 !/mods/ports
 !/mods/status-ports
-!/mods/git-graph
 !/mods/tabs-graph
 !/mods/git-diff
 !/mods/source-control

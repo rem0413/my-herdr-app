@@ -5,7 +5,7 @@ import { parseStatus, parseNumstat, checkState, treeRows, ago } from "./git.js";
 import GitGraph from "./graph.js";
 
 // Source control for the focused pane's repo: stage/unstage by checkbox, commit, push/pull,
-// repo (superproject + submodules) and branch pickers, stashes. History is the git-graph mod, nested.
+// repo (superproject + submodules) and branch pickers, stashes. History is the commit graph (graph.js).
 // Diffs open in the shared git-diff preview tab (see mods/git-diff/main.js).
 
 // Mod panes (the diff tab) have no cwd: keep the last terminal's folder instead of jumping to the space folder.
@@ -407,7 +407,7 @@ export default class SourceControl extends View {
         .child(div().flex_1().min_w(0).truncate().child(this.head.subject))
         .child(this.button("sc-undo", "undo", null, (cx) => this.act("Undoing last commit", [["reset", "--soft", "HEAD~1"]], cx, () => { this.message = this.head.subject; this.msg.set_value(this.head.subject); }), t, { disabled: Boolean(this.busy) }))
         .child(div().id("sc-history").w(26).h(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().text_color(t.muted)
-          .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => this.setTab("history", cx)).child(svg("mods/git-graph/graph.svg").size(14)))));
+          .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => this.setTab("history", cx)).child(svg("mods/source-control/graph.svg").size(14)))));
   }
 
   render(cx) {

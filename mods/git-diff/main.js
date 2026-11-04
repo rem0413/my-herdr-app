@@ -3,7 +3,7 @@ import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { exec, theme, settings, shared, setShared, panes, run } from "herdr";
 import { pairRows, unifiedRows, countPatch } from "./diff.js";
 
-// The diff preview tab. git-graph and source-control open one tab of this and reuse it; it shows
+// The diff preview tab. source-control opens one tab of this and reuses it; it shows
 // shared("git-diff.preview"):
 //   { repo, on, hash, path?, subject?, author?, time? }  a commit (path: one file, else every file)
 //   { repo, on, path, worktree: true, untracked? }       HEAD ↔ working tree of one file
