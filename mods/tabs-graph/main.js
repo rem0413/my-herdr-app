@@ -1,6 +1,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { tabTitle } from "./title.js";
 
 // Editor tabs with unsaved changes ask first (file-dialog); everything else closes as before.
 function closeTab(id, edit) {
@@ -59,12 +60,15 @@ export default class Tabs extends View {
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
     const item = (c, i) => {
-      const program = panes().find(p => p.tab === c.id && p.program?.agent)?.program ?? panes().find(p => p.tab === c.id)?.program;
-      const name = /^tb\d+$/.test(c.name) ? program?.name ?? "Terminal" : c.name;
+      const all = panes().filter(p => p.tab === c.id);
+      const pane = all.find(p => p.program?.agent) ?? all.find(p => p.focused) ?? all[0];
+      const program = pane?.program;
+      const name = tabTitle(c, pane);
       // file-editor tabs: git letter and unsaved dot.
       const edit = (shared("editor.state") ?? {})[c.id];
       const gitColor = edit?.git === "U" || edit?.git === "A" ? "#73c991" : edit?.git === "D" || edit?.git === "!" ? "#e06c75" : "#e5a54b";
-      return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
+      const label = c.zoomed ? `${name} Z` : name;
+      return h_flex().id(`tab-${c.id}`).w(180).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(11)
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
@@ -76,7 +80,7 @@ export default class Tabs extends View {
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
         .when(Boolean(program?.icon) && !edit, el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .when(Boolean(edit), el => el.child(svg(edit.icon?.path ?? "mods/my-files/icons/file.svg").size(13).text_color(edit.icon?.color ?? t.muted)))
-        .child(div().max_w(170).truncate().when(Boolean(edit?.git), el => el.text_color(gitColor)).child(c.zoomed ? `${name} Z` : name))
+        .child(div().flex_1().min_w(0).truncate().when(Boolean(edit?.git), el => el.text_color(gitColor)).child(label))
         .when(Boolean(edit?.git), el => el.child(div().text_size(11).text_color(gitColor).child(edit.git)))
         .when(Boolean(edit?.dirty), el => el.child(div().size(7).rounded(4).bg(t.foreground)))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
