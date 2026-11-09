@@ -58,7 +58,11 @@
     "ctrl-8": "space.select:8",
     "ctrl-9": "space.select:9",
     "ctrl-shift-r": "agent-resume.panel",
-    "cmd-alt-p": "mod.open:ports"
+    "cmd-alt-p": "mod.open:ports",
+    "cmd-g": "mod.open:open-vscode",
+    "cmd-shift-e": "mod.open:excalidraw",
+    "cmd-shift-n": "mod.open:new-project",
+    "cmd-alt-,": "mod.open:better-config"
   },
   "terminal": {
     "cmd-c": "terminal.copy",
@@ -69,6 +73,16 @@
     "alt-backspace": "send:\u0017",
     "cmd-left": "send:\u0001",
     "cmd-right": "send:\u0005",
-    "cmd-backspace": "send:\u0015"
+    "cmd-backspace": "send:\u0015",
+    "cmd-shift-e": "mod.open:excalidraw"
+  },
+  "layout:orca": {
+    "cmd-n": "mod.open:new-worktree",
+    "cmd-shift-a": "layout.toggle:agents",
+    "cmd-shift-b": "better-sidebar.toggle-panel",
+    "cmd-alt-]": "better-sidebar.next-space",
+    "cmd-alt-[": "better-sidebar.prev-space",
+    "cmd-w": "my-tabs.close-tab",
+    "cmd-shift-w": "my-tabs.close-pane"
   }
 }
