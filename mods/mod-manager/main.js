@@ -3,7 +3,7 @@
 // - On/off: hides/shows the mod's blocks in the shown layout (layout.hide/show). Mods with a kit.json
 //   also follow shared "herdr-mods.disabled" (they draw nothing while listed), so they can be off with no block.
 // - Updates: `update-mods.sh -n` checks, `update-mods.sh <mod>` updates (it runs herdr-app check).
-import { View, div } from "gpui-kit";
+import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, appHome, theme, layout, run, shared, setShared, props, closeOverlay, notify } from "herdr";
 
@@ -23,7 +23,7 @@ export default class ModManager extends View {
     this.mods = [];       // { name, kit, local }
     this.sources = {};    // mod-sources.json
     this.updates = {};    // name -> "<old> -> <new>" | "up to date" | error text
-    this.busy = null;     // "check" | mod name
+    this.busy = null;     // "check:<mod>" while checking, "<mod>" while updating
     this.filter = "all";
     this.message = null;
     this.load(cx);
@@ -51,17 +51,15 @@ export default class ModManager extends View {
     });
   }
 
-  check(cx) {
-    this.busy = "check"; this.message = "Checking repos…"; cx.notify();
+  // One repo mod at a time: `update-mods.sh -n <mod>` prints "<mod>: up to date (…)" or "<mod>: <old> -> <new>".
+  check(name, cx) {
+    this.busy = `check:${name}`; this.message = `Checking ${name}…`; cx.notify();
     cx.spawn(async cx => {
-      const r = await this.sh("./update-mods.sh -n", [], 120000).catch(e => ({ code: 1, stdout: "", stderr: String(e) }));
-      this.updates = {};
-      for (const line of r.stdout.split("\n")) {
-        const m = line.match(/^([^:]+): (.*)$/);
-        if (m) this.updates[m[1]] = m[2];
-      }
-      const n = Object.values(this.updates).filter(v => v.includes("->")).length;
-      this.message = r.code ? `Check failed: ${r.stderr.trim()}` : n ? `${n} update${n > 1 ? "s" : ""} available` : "Every repo mod is up to date";
+      const r = await this.sh('./update-mods.sh -n "$1"', [name], 60000).catch(e => ({ code: 1, stdout: "", stderr: String(e) }));
+      const m = r.stdout.match(new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: (.*)$`, "m"));
+      if (m) this.updates[name] = m[1];
+      this.message = r.code || !m ? `Check of ${name} failed: ${(r.stderr || r.stdout).trim().split("\n").pop()}`
+        : m[1].includes("->") ? `${name}: update available` : `${name} is up to date`;
       this.busy = null; cx.notify();
     });
   }
@@ -100,10 +98,8 @@ export default class ModManager extends View {
     return v_flex().id("mod-manager").size_full().bg(t.popover).text_size(12.5).text_color(t.foreground)
       .child(h_flex().px(14).py(10).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().flex_1().font_semibold().text_size(13.5).child("Mod Manager"))
-        .child(this.button(t, "check", this.busy === "check" ? "Checking…" : "Check updates", Boolean(this.busy), () => this.check(cx)))
-        .child(this.button(t, "reload", "↻", Boolean(this.busy), () => this.load(cx)))
-        .child(div().id("close").px(6).rounded(4).text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground))
-          .on_click(() => closeOverlay(props()?.overlay)).child("✕")))
+        .child(this.icon(t, "reload", "mods/mod-manager/refresh.svg", "Reload the mod list", Boolean(this.busy), (_e, cx) => this.load(cx)))
+        .child(this.icon(t, "close", "mods/workspace-chrome/x.svg", "Close", false, () => closeOverlay(props()?.overlay))))
       .child(h_flex().px(14).py(8).gap(6)
         .children(["all", "repo", "local", "herdr"].map(f =>
           div().id(`f-${f}`).px(10).py(3).rounded(10).text_size(11.5)
@@ -133,17 +129,20 @@ export default class ModManager extends View {
         .child(div().text_size(11.5).text_color(t.dim).truncate().child(
           src ? `${repo} · ${src.ref ?? "main"} @ ${(src.commit ?? "?").slice(0, 7)}${upd ? ` · ${hasUpdate ? `new ${upd.split("-> ")[1].slice(0, 7)}` : upd}` : ""}`
             : m.source === "herdr" ? "Shipped with Herdr, updated by the app" : "Personal mod, no upstream")))
-      .when(hasUpdate, el => el.child(this.button(t, `u-${m.name}`, this.busy === m.name ? "Updating…" : "Update", Boolean(this.busy), () => this.update(m.name, cx), true)))
+      .when(Boolean(src), el => el.child(hasUpdate
+        ? this.icon(t, `u-${m.name}`, "mods/mod-manager/update.svg", `Update to ${upd.split("-> ")[1].slice(0, 7)}`, Boolean(this.busy), (_e, cx) => this.update(m.name, cx), this.busy === m.name, true)
+        : this.icon(t, `c-${m.name}`, "mods/mod-manager/check.svg", "Check for update", Boolean(this.busy), (_e, cx) => this.check(m.name, cx), this.busy === `check:${m.name}`)))
       .child(can ? this.switch(t, `s-${m.name}`, !isOff, () => this.toggle(m))
         : div().w(34).text_size(10.5).text_color(t.dim).child("—"));
   }
 
-  button(t, id, label, disabled, onClick, primary = false) {
-    return div().id(id).px(10).py(3).rounded(5).text_size(11.5)
-      .bg(primary ? t.solid : t.raised).text_color(primary ? t.solid_foreground : t.foreground)
-      .when(disabled, el => el.opacity(0.5))
-      .when(!disabled, el => el.hover(s => s.bg(t.hover)).on_click(onClick))
-      .child(label);
+  // An icon button with a tooltip; `spin` while its work runs, `primary` for the row's Update.
+  icon(t, id, path, tip, disabled, onClick, spin = false, primary = false) {
+    return div().id(id).flex_none().p(5).rounded(5).tooltip(tip)
+      .bg(primary ? t.solid : t.popover).text_color(primary ? t.solid_foreground : t.muted)
+      .when(disabled && !spin, el => el.opacity(0.5))
+      .when(!disabled, el => el.hover(s => s.bg(primary ? t.solid : t.hover).text_color(primary ? t.solid_foreground : t.foreground)).on_click(onClick))
+      .child(spin ? svg("mods/workspace-chrome/spinner.svg").size(14).spin(900) : svg(path).size(14));
   }
 
   switch(t, id, on, onClick) {
