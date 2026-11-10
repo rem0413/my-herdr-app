@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings } from "herdr";
 import { tabTitle } from "./title.js";
 
 // Editor tabs with unsaved changes ask first (file-dialog); everything else closes as before.
@@ -71,7 +71,14 @@ export default class Tabs extends View {
       return h_flex().id(`tab-${c.id}`).w(180).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(11)
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
-        .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
+        .on_mouse_down("left", (e, cx) => {
+          cx.stop_propagation(); this.pressed = i;
+          if (e.click_count !== 2) return;
+          // A preview editor tab: a double click keeps it (as in VS Code); others rename.
+          const pre = shared("editor.preview") ?? {};
+          if (pre[space.id] === c.id) { const map = { ...pre }; delete map[space.id]; setShared("editor.preview", map); }
+          else run("tab.rename", { id: c.id });
+        })
         .on_mouse_up("left", () => {
           const from = this.pressed; this.pressed = null;
           if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
@@ -80,7 +87,8 @@ export default class Tabs extends View {
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
         .when(Boolean(program?.icon) && !edit, el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .when(Boolean(edit), el => el.child(svg(edit.icon?.path ?? "mods/my-files/icons/file.svg").size(13).text_color(edit.icon?.color ?? t.muted)))
-        .child(div().flex_1().min_w(0).truncate().when(Boolean(edit?.git), el => el.text_color(gitColor)).child(label))
+        .child(div().flex_1().min_w(0).truncate().when(Boolean(edit?.git), el => el.text_color(gitColor))
+          .when((shared("editor.preview") ?? {})[space.id] === c.id, el => el.italic().text_color(t.dim)).child(label))
         .when(Boolean(edit?.git), el => el.child(div().text_size(11).text_color(gitColor).child(edit.git)))
         .when(Boolean(edit?.dirty), el => el.child(div().size(7).rounded(4).bg(t.foreground)))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))

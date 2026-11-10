@@ -15,32 +15,32 @@ function location() {
 }
 const key = () => JSON.stringify(location());
 
-// One tab per file (file-editor), reused through shared("editor.tabs"). The tab gets its icon in props.
-// Images open in image-viewer instead, reusing a viewer tab with the same name. The viewer reads
-// local files only, so a remote image is first copied to /tmp/herdr-remote-img/<machine>/<path>.
-// The viewer stages its own copy within seconds, so each remote open sweeps copies older than 1 hour.
-// ponytail: reuse matches tab name (run() returns no tab id); same-named images in other folders reuse it. Track ids if that bites.
-const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|ico|tiff?)$/i;
-function openImage(space, file, name) {
-  const tabs = spaces().find(s => s.id === space)?.tabs ?? [];
-  const hit = panes().find(p => p.mod === "image-viewer" && tabs.some(x => x.id === p.tab && x.name === name));
-  if (hit) run("tab.select", { id: hit.tab });
-  else run("tab.new", { name, space, mod: "image-viewer", props: { file } });
-}
-function openFile(space, path, on, icon) {
+// One tab per file (file-editor, which also shows pictures and previews Markdown/SVG), reused through
+// shared("editor.tabs"). A single click opens a preview tab (italic) that the next single click replaces;
+// a double click keeps it (shared "editor.preview" lists each space's preview tab, file-editor owns it).
+// Two open files with one name get "folder/name" tabs.
+function tabName(space, path) {
   const name = path.split("/").pop();
-  if (IMAGE.test(path)) {
-    if (!on) return openImage(space, path, name);
-    const dir = "/tmp/herdr-remote-img", local = `${dir}/${on}${path}`;
-    const script = 'find "$4" -type f -mmin +60 -delete 2>/dev/null; find "$4" -type d -empty -delete 2>/dev/null; mkdir -p "$(dirname "$3")" && hc exec --on "$1" -- cat -- "$2" > "$3"';
-    exec("sh", ["-c", script, "img", on, path, local, dir], { timeout: 60000 })
-      .then(r => r.code === 0 ? openImage(space, local, name) : Promise.reject(new Error(r.stderr.trim() || "copy failed")))
-      .catch(e => notify({ title: `Cannot open ${name} from ${on}`, body: String(e?.message ?? e), level: "error" }));
-    return;
-  }
-  const tab = (shared("editor.tabs") ?? {})[`${space}|${path}`];
-  if (tab && spaces().some(s => s.id === space && s.tabs.some(x => x.id === tab))) run("tab.select", { id: tab });
-  else run("tab.new", { name, space, mod: "file-editor", props: { file: path, on, space, icon } });
+  const open = new Set(spaces().find(s => s.id === space)?.tabs.map(x => x.id));
+  const clash = Object.entries(shared("editor.tabs") ?? {})
+    .some(([k, id]) => open.has(id) && k.startsWith(`${space}|`) && k !== `${space}|${path}` && k.endsWith(`/${name}`));
+  return clash ? path.split("/").slice(-2).join("/") : name;
+}
+function openFile(space, path, on, icon, { keep = false } = {}) {
+  const key = `${space}|${path}`;
+  const live = (id) => id && spaces().some(s => s.id === space && s.tabs.some(x => x.id === id));
+  const previewTab = (shared("editor.preview") ?? {})[space];
+  const tab = (shared("editor.tabs") ?? {})[key];
+  const keepIt = () => {
+    const map = { ...(shared("editor.preview") ?? {}) };
+    if (map[space] === tab) { delete map[space]; setShared("editor.preview", map); }
+    else if (!live(tab)) setShared("editor.keep", key); // its tab is still opening: keep it when it registers
+  };
+  if (live(tab)) { run("tab.select", { id: tab }); if (keep) keepIt(); return; }
+  // A clean preview tab gives way to the new one (file-editor promotes it on the first edit).
+  const prev = live(previewTab) && (shared("editor.state") ?? {})[previewTab];
+  if (prev && !prev.dirty) run("tab.close", { id: previewTab, confirmed: true });
+  run("tab.new", { name: tabName(space, path), space, mod: "file-editor", props: { file: path, on, space, icon, preview: !keep } });
 }
 // The file whose editor tab is shown in that space.
 function shownFile(space) {
@@ -222,7 +222,7 @@ export default class Files extends View {
       if (r.code !== 0) { e.editError = r.stderr.trim() || `${name} already exists`; this.input.focus(); cx.notify(); return; }
       this.cancelEdit(cx);
       this.refresh(cx);
-      if (e.kind === "file") openFile(this.context.space, target, this.on, iconFor(name, false, this.config));
+      if (e.kind === "file") openFile(this.context.space, target, this.on, iconFor(name, false, this.config), { keep: true });
     });
   }
 
@@ -244,17 +244,18 @@ export default class Files extends View {
       const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
       if (this.edit?.kind === "rename" && this.edit.path === `${this.root}/${path}`) { out.push(this.editRow(depth, t)); continue; }
       const active = !entry.dir && this.shown === `${this.root}/${path}`;
+      const preview = active && this.previewShown;
       const color = mark === "U" || mark === "A" ? "#73c991" : mark === "D" || mark === "!" ? "#e06c75" : "#e5a54b";
       // Ignored entries mute both the file-type icon and the name.
       const icon = iconFor(entry.name, entry.dir, this.config);
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
         .when(active, el => el.bg(t.selected))
-        .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : openFile(this.context.space, `${this.root}/${path}`, this.on, icon))
+        .on_click((e, cx) => entry.dir ? this.toggle(path, cx) : openFile(this.context.space, `${this.root}/${path}`, this.on, icon, { keep: e.click_count >= 2 }))
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "file-menu", kind: "popup", frame: "none", width: 510, height: 420,
           props: { path: `${this.root}/${path}`, root: this.root, dir: entry.dir, on: this.on, space: this.context.space } }); })
         .child(entry.dir ? svg(`mods/my-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(svg(icon.path).size(14).flex_none().text_color(entry.ignored ? t.dim : icon.color ?? t.muted))
-        .child(div().flex_1().min_w(0).truncate().text_color(entry.ignored ? t.dim : mark ? color : t.foreground).when(entry.ignored, el => el.italic()).child(entry.name))
+        .child(div().flex_1().min_w(0).truncate().text_color(entry.ignored || preview ? t.dim : mark ? color : t.foreground).when(entry.ignored || preview, el => el.italic()).child(entry.name))
         .when(Boolean(mark), el => el.child(div().text_size(11).text_color(color).child(mark))));
       if (entry.dir && open) this.rows(path, depth + 1, out, t);
     }
@@ -267,6 +268,8 @@ export default class Files extends View {
     if (key() !== this.context?.key) this.refresh(cx);
     const t = theme();
     this.shown = shownFile(this.context.space);
+    const shownTab = spaces().find(s => s.id === this.context.space)?.tabs.find(x => x.active)?.id;
+    this.previewShown = Boolean(shownTab) && (shared("editor.preview") ?? {})[this.context.space] === shownTab;
     const req = shared("files.edit");
     // Cleared elsewhere (another copy committed or cancelled): drop this row too.
     if (!req && this.edit && !this.editBusy) { this.edit = null; this.editReq = null; }
