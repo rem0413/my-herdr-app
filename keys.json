@@ -58,6 +58,7 @@
     "ctrl-8": "space.select:8",
     "ctrl-9": "space.select:9",
     "ctrl-shift-r": "agent-resume.panel",
+    "cmd-alt-m": "mod.open:mod-manager",
     "cmd-alt-p": "mod.open:ports",
     "cmd-g": "mod.open:open-vscode",
     "cmd-shift-e": "mod.open:excalidraw",
