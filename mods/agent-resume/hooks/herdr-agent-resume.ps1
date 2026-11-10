@@ -47,6 +47,15 @@ if ($null -eq $def) { exit 0 }
 $terminal = $env:HC_TERMINAL_ID
 if ([string]::IsNullOrWhiteSpace($terminal)) { exit 0 }
 
+# The hc program of herdr-core: from the PATH, else from the folder of the Windows
+# installer (%LOCALAPPDATA%\Programs\herdr-core), which the installer does not add to the PATH.
+$hc = Get-Command hc -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
+if (-not $hc -and $env:LOCALAPPDATA) {
+    $installed = Join-Path $env:LOCALAPPDATA 'Programs\herdr-core\hc.exe'
+    if (Test-Path -LiteralPath $installed) { $hc = $installed }
+}
+if (-not $hc) { exit 0 }
+
 # Read the hook input as UTF-8 bytes.
 $reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)
 $text = $reader.ReadToEnd()
@@ -112,7 +121,7 @@ function Get-ResumeArgs([string[]]$tokens) {
 }
 
 try {
-    $info = hc get $terminal --json 2>$null | ConvertFrom-Json
+    $info = & $hc get $terminal --json 2>$null | ConvertFrom-Json
 } catch {
     exit 0
 }
@@ -136,7 +145,7 @@ if ($Action -eq "start") {
     }
     if ($null -ne $firstWord -and $def.oneShot -contains $firstWord) { exit 0 }
     $resumeArgs = Get-ResumeArgs $tokens
-    hc label $terminal "resume.agent=$Agent" "resume.session=$sessionId" "resume.pid=$($info.pid)" "resume.args=$resumeArgs" "resume.tried=" 2>$null | Out-Null
+    & $hc label $terminal "resume.agent=$Agent" "resume.session=$sessionId" "resume.pid=$($info.pid)" "resume.args=$resumeArgs" "resume.tried=" 2>$null | Out-Null
     exit 0
 }
 
@@ -147,6 +156,6 @@ if ($Action -eq "end") {
     $reason = "$($payload.reason)"
     if ($reason -ne "prompt_input_exit" -and $reason -ne "logout") { exit 0 }
     if ($info.labels.'resume.session' -ne $sessionId) { exit 0 }
-    hc label $terminal "resume.agent=" "resume.session=" "resume.pid=" "resume.args=" "resume.tried=" 2>$null | Out-Null
+    & $hc label $terminal "resume.agent=" "resume.session=" "resume.pid=" "resume.args=" "resume.tried=" 2>$null | Out-Null
     exit 0
 }

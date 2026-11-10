@@ -11,6 +11,8 @@
 // ~/.config/opencode/tui.jsonc: { "plugin": ["./herdr-agent-resume-opencode.js"] }
 
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 const POLL_MS = 1000;
 // Session flags that the mod adds again, and flags with a separate value.
@@ -19,9 +21,22 @@ const DROP_WITH_VALUE = new Set(["--session", "-s", "--prompt"]);
 const VALUES = new Set(["--server", "--log-level", "-m", "--model", "--agent"]);
 const SAFE = /^[\w.:/\\=-]+$/;
 
+// The hc program of herdr-core: "hc" from the PATH. On Windows, when it is not on the
+// PATH, the hc.exe of the installer folder (%LOCALAPPDATA%\Programs\herdr-core), which
+// the installer does not add to the PATH.
+const INSTALLED_HC = process.platform === "win32" && process.env.LOCALAPPDATA
+  ? join(process.env.LOCALAPPDATA, "Programs", "herdr-core", "hc.exe")
+  : null;
+let hc = "hc";
+
 function run(args) {
   return new Promise((resolve) => {
-    execFile("hc", args, { windowsHide: true, timeout: 5000 }, (error, stdout) => {
+    execFile(hc, args, { windowsHide: true, timeout: 5000 }, (error, stdout) => {
+      if (error?.code === "ENOENT" && hc === "hc" && INSTALLED_HC && existsSync(INSTALLED_HC)) {
+        hc = INSTALLED_HC;
+        resolve(run(args));
+        return;
+      }
       resolve(error ? null : String(stdout));
     });
   });
