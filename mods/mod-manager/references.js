@@ -1,28 +1,27 @@
 // Conservative static scan: literals, command prefixes and cross-mod asset/import paths.
 // Dynamic names cannot be proven by this scan; unreferenced never means safe to delete.
-export function dependencies(text, names, self) {
-  const found = new Set();
-  for (const match of text.matchAll(/["'`]([^"'`\n]+)["'`]/g)) {
-    const value = match[1];
-    for (const name of names) {
-      if (name !== self && (value === name || value.startsWith(`${name}.`)
-        || value === `mod.open:${name}` || value.startsWith(`mod.open:${name}:`) || value.includes(`mods/${name}/`)
-        || value.startsWith(`../${name}/`))) found.add(name);
-    }
-  }
-  return [...found];
+// One `grep -rEo` over mods/ with this pattern; mod names are [A-Za-z0-9_-] (no regex escaping needed).
+export function grepPattern(names) {
+  const n = `(${names.join("|")})`, q = "[\"'`]";
+  return `${q}${n}${q}|${q}${n}\\.|${q}mod\\.open:${n}[\"'\`:]|mods/${n}/|${q}\\.\\./${n}/`;
 }
 
-export function keyReferences(bindings, name) {
-  const result = [];
-  for (const [section, entries] of Object.entries(bindings ?? {})) {
-    for (const [key, action] of Object.entries(entries ?? {})) {
-      const command = typeof action === "string" ? action : action?.command;
-      if (command === `mod.open:${name}` || command?.startsWith(`${name}.`)
-        || (command === "mod.open" && action?.args?.name === name)) result.push(`${section}: ${key}`);
-    }
+// `grep -o` output lines "mods/<owner>/<file>:<match>" into { owner: [target, ...] }.
+export function dependencies(output, names) {
+  const edges = {}, known = new Set(names);
+  for (const line of output.split("\n")) {
+    const [, owner, match] = line.match(/^mods\/([^/]+)\/[^:]*:(.*)$/) ?? [];
+    const target = match?.replace(/^["'`]/, "").replace(/^(mod\.open:|mods\/|\.\.\/)/, "").match(/^[A-Za-z0-9_-]+/)?.[0];
+    if (!known.has(target) || target === owner) continue;
+    (edges[owner] ??= new Set()).add(target);
   }
-  return result;
+  return Object.fromEntries(Object.entries(edges).map(([k, v]) => [k, [...v]]));
+}
+
+// `bindings` is herdr's keys(): [{ section, keys, action }].
+export function keyReferences(bindings, name) {
+  return (bindings ?? []).filter(({ action }) => action === `mod.open:${name}` || action?.startsWith(`${name}.`)
+    || action?.startsWith(`mod.open:${name}:`)).map(b => `${b.section}: ${b.keys}`);
 }
 
 export function reachable(roots, edges) {

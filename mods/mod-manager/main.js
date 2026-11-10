@@ -7,7 +7,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, appHome, theme, layout, layouts, panes, spaces, keys, readTextFile, writeTextFile, openOverlay, nextCommand, run, shared, setShared, props, closeOverlay, notify } from "herdr";
 import { usesMod, usage } from "./usage.js";
-import { dependencies, keyReferences, reachable, canDelete } from "./references.js";
+import { grepPattern, dependencies, keyReferences, reachable, canDelete } from "./references.js";
 
 const OFF_KEY = "herdr-mods.disabled";
 const off = () => { const v = shared(OFF_KEY); return Array.isArray(v) ? v : []; };
@@ -79,29 +79,28 @@ export default class ModManager extends View {
         this.message = `Cannot read layout usage: ${error.message ?? error}`;
       }
       const r = await this.sh('for d in mods/*/; do n=${d#mods/}; n=${n%/}; [ -f "$d/main.js" ] || continue; '
-        + 'k=0; [ -f "$d/kit.json" ] && k=1; c=0; git diff --quiet HEAD -- "$d" 2>/dev/null || c=1; echo "$n $k $c"; done; '
-        + 'echo ---; cat mod-sources.json 2>/dev/null; echo ---; jq -c "keys" installed.json 2>/dev/null');
-      const [list, src, herdr] = r.stdout.split("---\n");
+        + 'k=0; [ -f "$d/kit.json" ] && k=1; echo "$n $k"; done; '
+        + 'echo ---; cat mod-sources.json 2>/dev/null; echo ---; jq -c "keys" installed.json 2>/dev/null; '
+        + 'echo ---; git status --porcelain -- mods 2>/dev/null');
+      const [list, src, herdr, dirty = ""] = r.stdout.split("---\n");
       try { this.sources = JSON.parse(src || "{}"); } catch { this.sources = {}; }
       let shipped = [];
       try { shipped = JSON.parse(herdr); } catch { throw new Error("Cannot verify shipped mod registry"); }
+      const changed = new Set(dirty.split("\n").filter(l => !l.startsWith("??")).map(l => l.slice(3).match(/^"?mods\/([^/"]+)/)?.[1]).filter(Boolean));
       this.mods = list.split("\n").filter(Boolean).map(l => {
-        const [name, kit, changed] = l.split(" ");
+        const [name, kit] = l.split(" ");
         const source = this.sources[name] ? "repo" : shipped.includes(name) ? "herdr" : "local";
-        return { name, kit: kit === "1", changed: changed === "1", source, shipped: shipped.includes(name) };
+        return { name, kit: kit === "1", changed: changed.has(name), source, shipped: shipped.includes(name) };
       });
       this.scanReady = false;
       try {
-        const files = await exec("find", ["mods", "-type", "d", "-name", "node_modules", "-prune", "-o", "-type", "f", "(", "-name", "*.js", "-o", "-name", "mod.json", "-o", "-name", "kit.json", ")", "-print"], { cwd: appHome() });
-        if (files.code !== 0) throw new Error(files.stderr);
+        // One regex pass over every mod source (rg ~30 ms, grep ~1.5 s fallback) instead of reading files through the bridge.
         const names = this.mods.map(m => m.name);
-        const edges = {};
-        for (const file of files.stdout.trim().split("\n").filter(Boolean)) {
-          const owner = file.split("/")[1];
-          const text = await readTextFile(`${appHome()}/${file}`);
-          edges[owner] = [...new Set([...(edges[owner] ?? []), ...dependencies(text, names, owner)])];
-        }
-        this.edges = edges;
+        const pattern = grepPattern(names);
+        const files = await exec("rg", ["-o", "-N", "--no-heading", "--with-filename", "--no-ignore", "--hidden", "-g", "*.js", "-g", "mod.json", "-g", "kit.json", "-g", "!node_modules", "-e", pattern, "mods"], { cwd: appHome() })
+          .catch(() => exec("grep", ["-rEo", "--include=*.js", "--include=mod.json", "--include=kit.json", "--exclude-dir=node_modules", pattern, "mods"], { cwd: appHome() }));
+        if (files.code > 1) throw new Error(files.stderr);
+        this.edges = dependencies(files.stdout, names);
         this.scanReady = layoutsReady;
       } catch (error) {
         this.message = `Usage scan incomplete: ${error.message ?? error}`;
@@ -221,9 +220,9 @@ export default class ModManager extends View {
         .child(h_flex().gap(5).items_center()
           .child(svg(`mods/mod-manager/${info.unused ? "unused" : running ? "running" : "linked"}.svg`).size(12).text_color(color).tooltip(summary || label))
           .child(div().text_size(11).text_color(color).child(label))))
-      .child(this.icon(t, `details-${m.name}`, "mods/mod-manager/info.svg", "Usage details", false, () => openOverlay({
-        mod: "mod-manager", kind: "popup", width: 420, height: 340,
-        props: { mode: "details", name: m.name, source: m.source, repo: src, update: upd, info, activity },
+      .child(this.icon(t, `details-${m.name}`, "mods/mod-manager/info.svg", this.scanReady ? "Usage details" : "Scanning usage…", !this.scanReady, () => openOverlay({
+        mod: "mod-manager", kind: "dialog", width: 460, height: 420,
+        props: { mode: "details", name: m.name, source: m.source, repo: src, update: upd, info, activity, label, changed: m.changed },
       })))
       .child(this.icon(t, `delete-${m.name}`, "mods/mod-manager/trash.svg", m.shipped || m.source === "herdr" ? "Herdr mods cannot be deleted" : !canDelete(m, info, this.scanReady) ? "Mod is referenced or scan is incomplete" : "Delete unused mod", Boolean(this.busy) || !canDelete(m, info, this.scanReady), () => openOverlay({
         mod: "mod-manager", kind: "dialog", width: 420, height: 230,
@@ -237,19 +236,40 @@ export default class ModManager extends View {
   }
   details(t) {
     const p = props(), info = p.info;
-    return v_flex().w(420).h(340).p(14).gap(10).bg(t.popover).text_color(t.foreground).text_size(12)
-      .child(h_flex().items_center().justify_between().child(div().font_semibold().child(p.name))
+    const tag = { repo: t.accent, herdr: t.dim, local: t.muted }[p.source];
+    const status = info.unused ? t.blocked : p.label === "Running" ? t.done : t.muted;
+    const chip = text => div().px(7).py(2).rounded(4).bg(t.raised).text_size(11).text_color(t.foreground).child(text);
+    const pill = (text, color) => div().px(7).py(1).rounded(4).border_1().border_color(color).text_size(10.5).text_color(color).child(text);
+    const repo = p.repo?.repo?.replace(/^https?:\/\/github\.com\//, "");
+    const section = (icon, title, items) => h_flex().gap(10).items_start().px(12).py(10).rounded(6).bg(t.surface).border_1().border_color(t.border)
+      .child(div().flex_none().p(5).rounded(5).bg(t.raised).text_color(t.muted).child(svg(`mods/mod-manager/${icon}.svg`).size(14)))
+      .child(v_flex().flex_1().min_w(0).gap(5)
+        .child(div().text_size(11).text_color(t.dim).child(title))
+        .child(items.length ? h_flex().flex_wrap().gap(4).children(items.map(chip)) : div().text_size(11.5).text_color(t.dim).child("None")));
+    const locked = p.source === "herdr" || !info.unused;
+    const note = p.source === "herdr" ? "Herdr may invoke this internally. Deletion locked."
+      : info.unused ? "No usage found. Dynamic or external callers may be missed." : "Referenced mod. Deletion locked.";
+    return v_flex().size_full().bg(t.popover).text_color(t.foreground).text_size(12)
+      .child(h_flex().px(14).py(12).gap(10).items_center().border_b(1).border_color(t.border)
+        .child(div().flex_none().p(7).rounded(7).bg(t.raised).text_color(tag).child(svg("mods/mod-manager/puzzle.svg").size(18)))
+        .child(v_flex().flex_1().min_w(0).gap(4)
+          .child(div().font_semibold().text_size(14).truncate().child(p.name))
+          .child(h_flex().gap(5).items_center()
+            .child(pill(p.source, tag))
+            .child(pill(p.label, status))
+            .when(Boolean(p.changed), el => el.child(pill("edited", t.blocked)))))
         .child(this.icon(t, "close-details", "mods/workspace-chrome/x.svg", "Close", false, () => closeOverlay(p.overlay))))
-      .child(v_flex().id("usage-details").flex_1().min_h(0).overflow_y_scrollbar().gap(8)
-        .children([
-          `Source: ${p.source}${p.repo ? ` · ${p.repo.repo} @ ${p.repo.commit ?? "?"}` : ""}`,
-          `Layouts: ${info.owners.join(", ") || "None"}`,
-          `Shortcuts: ${info.shortcuts.join(", ") || "None"}`,
-          `Open tabs: ${info.tabs.join(", ") || "None"}`,
-          `Referenced by mods: ${info.callers.join(", ") || "None"}`,
-          `Activity: ${p.activity}`,
-          p.source === "herdr" ? "Herdr may invoke this internally. Deletion locked." : info.unused ? "No usage found. Dynamic or external callers may be missed." : "Referenced mod. Deletion locked.",
-        ].map(text => div().child(text))));
+      .child(v_flex().id("usage-details").flex_1().min_h(0).overflow_y_scrollbar().p(14).gap(8)
+        .when(Boolean(repo), el => el.child(section("source", "Source", [repo, (p.repo?.commit ?? "?").slice(0, 7), ...(p.update ? [p.update] : [])])))
+        .child(section("activity", "Activity", [p.activity]))
+        .child(section("layout", "Layouts", info.owners))
+        .child(section("keyboard", "Shortcuts", info.shortcuts))
+        .child(section("tab", "Open tabs", info.tabs))
+        .child(section("linked", "Referenced by mods", info.callers)))
+      .child(h_flex().px(14).py(10).gap(8).items_center().border_t(1).border_color(t.border).text_size(11.5)
+        .text_color(locked ? t.muted : t.blocked)
+        .child(svg(`mods/mod-manager/${locked ? "lock" : "unused"}.svg`).size(13))
+        .child(div().flex_1().child(note)));
   }
 
   deleteDialog(t, cx) {

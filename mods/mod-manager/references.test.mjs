@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { dependencies, keyReferences, reachable, canDelete } from "./references.js";
+import { grepPattern, dependencies, keyReferences, reachable, canDelete } from "./references.js";
 const names = ["panel", "viewer", "menu", "orphan"];
-assert.deepEqual(dependencies('openOverlay({ mod: "viewer" }); svg("mods/menu/icon.svg"); run("panel.refresh");', names, "panel"), ["viewer", "menu"]);
-assert.deepEqual(dependencies('"viewer-other"; "unrelated"', names, "panel"), []);
-assert.deepEqual(keyReferences({ global: { "cmd-a": "mod.open:viewer", "cmd-b": { command: "mod.open", args: { name: "viewer" } }, "cmd-c": "viewer.refresh", "cmd-d": "mod.open:viewer-other" } }, "viewer"), ["global: cmd-a", "global: cmd-b", "global: cmd-c"]);
+const re = new RegExp(grepPattern(names), "g");
+const grep = (file, text) => [...text.matchAll(re)].map(m => `${file}:${m[0]}`).join("\n");
+assert.deepEqual(dependencies(grep("mods/panel/main.js", 'openOverlay({ mod: "viewer" }); svg("mods/menu/icon.svg"); run("panel.refresh");'), names), { panel: ["viewer", "menu"] });
+assert.deepEqual(dependencies(grep("mods/panel/main.js", '"viewer-other"; "unrelated"; "mod.open:menu"'), names), { panel: ["menu"] });
+assert.deepEqual(keyReferences([{ section: "global", keys: "cmd-a", action: "mod.open:viewer" }, { section: "global", keys: "cmd-c", action: "viewer.refresh" }, { section: "global", keys: "cmd-d", action: "mod.open:viewer-other" }], "viewer"), ["global: cmd-a", "global: cmd-c"]);
 const used = reachable(["panel"], { panel: ["viewer"], viewer: ["menu"], menu: ["viewer"], orphan: ["orphan"] });
 assert.deepEqual([...used], ["panel", "viewer", "menu"]);
 // An isolated dependency cycle must remain a cleanup candidate.
