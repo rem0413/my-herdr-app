@@ -6,9 +6,9 @@
 // switch (a closed entry opens a new shell where it was), drag to reorder.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
-import { EMPTY, canParent, flatten, reconcile, setParent, startReopen, toggleFold, togglePin } from "./tree.js";
+import { EMPTY, canParent, flatten, reconcile, setColor, setParent, startReopen, toggleFold, togglePin } from "./tree.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -31,6 +31,15 @@ function place(s, ps) {
 const rowHeight = ({ depth }) => (depth > 0 ? 28 : 30);
 const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
 const base = (path) => path.replace(/\/+$/, "").split("/").pop();
+// Tag colors a space can take. Green when unset. Keys stay the stored ids ("ansi1"),
+// drawn in fixed vivid hex (macOS Finder tag style): theme ANSI is too dark on chrome.
+// Each color is one tag; its name lives in shared("workspace.tags") ({ ansi1: "bugs" }).
+const COLORS = [["Green", "ansi2"], ["Red", "ansi1"], ["Yellow", "ansi3"], ["Blue", "ansi4"], ["Magenta", "ansi5"], ["Cyan", "ansi6"]];
+const HEX = { ansi2: "#4ce16a", ansi1: "#fe4f55", ansi3: "#ffd23f", ansi4: "#3d9bff", ansi5: "#c86bff", ansi6: "#3fd8e6" };
+const DEFAULT_COLOR = "ansi2";
+const colorOf = (entry) => entry?.color ?? DEFAULT_COLOR;
+const tagName = (key) => shared("workspace.tags")?.[key] || COLORS.find(([, k]) => k === key)?.[0] || key;
+const colorDot = (t, key) => div().size(7).rounded(4).flex_none().bg(HEX[key] ?? t.dim);
 // Changes made outside Herdr (an editor's save, a commit in another app): looked
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
@@ -290,6 +299,9 @@ export default class Spaces extends View {
           .map((e) => [e.name, "chevron-right", () => done(setParent(state, entry.id, e.id)), e.folder ? base(e.folder) : ""]),
       ];
     }
+    if (this.menuView === "color") {
+      return COLORS.map(([, key]) => [tagName(key), `color:${key}`, () => done(setColor(state, entry.id, key === DEFAULT_COLOR ? null : key)), colorOf(entry) === key ? "✓" : ""]);
+    }
     const worktree = (action) => () => {
       closeOverlay(props().overlay);
       openOverlay({ mod: "worktree", kind: "dialog", ...(action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: { space: menu.space, action } });
@@ -298,6 +310,8 @@ export default class Spaces extends View {
       ...(menu.space ? [] : [["Open", "terminal", () => { closeOverlay(props().overlay); reopen(state, entry); }]]),
       [entry.pinned ? "Unpin" : "Pin", entry.pinned ? "pin-off" : "pin", () => done(togglePin(state, entry.id))],
       ["Set parent…", "git-branch", () => { this.menuView = "parent"; this.at = 0; }],
+      ["Tag…", `color:${colorOf(entry)}`, () => { this.menuView = "color"; this.at = 0; }, tagName(colorOf(entry))],
+      ["Rename tag…", "square-pen", () => this.editTag(colorOf(entry))],
       ...(menu.space ? [["Rename", "square-pen", () => { closeOverlay(props().overlay); run("space.rename", { id: menu.space }); }]] : []),
       ...(menu.git ? [["New worktree", "git-branch", worktree("new")], ["Open worktree", "git-branch", worktree("open")]] : []),
       ...(menu.git === "linked" ? [["Remove worktree", "git-branch", worktree("remove")]] : []),
@@ -305,8 +319,29 @@ export default class Spaces extends View {
     ];
   }
 
+  // Inline rename of one color's tag name, inside the popup.
+  editTag(key) {
+    this.menuView = "tag";
+    this.tagKey = key;
+    this.tagInput = InputState.new({ value: shared("workspace.tags")?.[key] ?? "" });
+    this.tagInput.on("submit", () => {
+      const tags = { ...(shared("workspace.tags") ?? {}) };
+      const name = this.tagInput.value().trim();
+      if (name) tags[key] = name; else delete tags[key];
+      setShared("workspace.tags", tags);
+      closeOverlay(props().overlay);
+    });
+    this.tagInput.focus();
+  }
+
   renderMenu() {
     const t = theme();
+    if (this.menuView === "tag") {
+      return v_flex().id("workspace-tag").w_full().min_h(0).p(8).gap(6).bg(t.popover).text_size(12)
+        .on_key_down((e) => { if (e.key === "escape") closeOverlay(props().overlay); })
+        .child(h_flex().gap(7).items_center().text_color(t.dim).child(colorDot(t, this.tagKey)).child("Tag name · Enter saves"))
+        .child(Input.new(this.tagInput).h(30).px(8).rounded(7).border_1().border_color(t.accent).bg(t.background).text_size(12.8).text_color(t.foreground));
+    }
     const list = this.menuItems();
     const pick = (i, cx) => {
       list[i]?.[2]();
@@ -344,7 +379,7 @@ export default class Spaces extends View {
               .when(i === this.at, (el) => el.bg(t.selected))
               .hover((s) => s.bg(t.hover))
               .on_click((_e, cx) => pick(i, cx))
-              .child(svg(`mods/workspace-chrome/${it[1]}.svg`).size(14).flex_none().text_color(t.muted))
+              .child(it[1].startsWith("color:") ? colorDot(t, it[1].slice(6)).mx(4) : svg(`mods/workspace-chrome/${it[1]}.svg`).size(14).flex_none().text_color(t.muted))
               .child(div().flex_1().min_w(0).truncate().child(it[0]))
               .child(div().max_w(80).flex_none().truncate().text_size(11).text_color(t.dim).child(it[3] ?? "")),
           ),
@@ -403,7 +438,11 @@ export default class Spaces extends View {
 
   // The rows, under a header per machine once one isn't this computer.
   grouped(t, collapsed) {
-    const rows = this.ordered().filter((r) => !collapsed || !r.closed);
+    // A child shows its top-level ancestor's tag; the header filter keeps one tag's rows.
+    let root = DEFAULT_COLOR;
+    const rows = this.ordered()
+      .map((r) => ({ ...r, tag: r.depth > 0 ? root : (root = colorOf(r.entry)) }))
+      .filter((r) => (!collapsed || !r.closed) && (!this.tagFilter || r.tag === this.tagFilter));
     const draw = (r) => (collapsed ? this.compact(r, t) : r.closed ? this.closedRow(r, t) : this.row(r, t));
     const remote = [...new Set([...rows.map(r => r.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
     const loading = m => {
@@ -447,7 +486,9 @@ export default class Spaces extends View {
         .on_click(() => run("space.new", { machine: m ?? "" }))
         .child(svg("mods/workspace-chrome/plus.svg").size(12)).when(!collapsed, el => el.child("New space there"));
       if (!collapsed && rebuilt) return [head];
-      return [head, ...(folded ? [] : mine.length ? mine.map(draw) : [loading(m) ? loadingRow(m) : empty])];
+      // Rows sit one step in from their machine header.
+      const inset = el => collapsed ? el : v_flex().flex_none().pl(12).child(el);
+      return [head, ...(folded ? [] : mine.length ? mine.map(r => inset(draw(r))) : [inset(loading(m) ? loadingRow(m) : empty)])];
     });
   }
 
@@ -498,7 +539,7 @@ export default class Spaces extends View {
     const on = w.active;
     const nest = depth > 0;
     const asleep = Boolean(shared("hibernate.sleeping")?.[w.id]);
-    const icon = nest ? "mods/workspace-chrome/folder.svg" : "mods/workspaces/parent.svg";
+    const icon = "mods/workspaces/space.svg";
     return v_flex()
       .relative()
       .id(`space-${w.id}`)
@@ -520,8 +561,9 @@ export default class Spaces extends View {
         h_flex()
           .gap(9)
           .items_center()
-          .when(nest, el => el.pl(8 + 14 * depth))
-          .child(svg(icon).size(18).flex_none().text_color(t.muted))
+          .when(nest, el => el.pl(8 + 15 + 14 * depth))
+          .when(!nest, el => el.child(colorDot(t, colorOf(entry))))
+          .child(svg(icon).size(16).flex_none().text_color(t.muted))
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(asleep ? t.dim : t.foreground).child(w.name))
           .child(g ? this.gitTail(g, nest, w.name, t) : div().flex_1())
           .when(asleep || on || this.hovered === w.id, el => el.child(this.sleepToggle(w, asleep, t)))
@@ -619,8 +661,9 @@ export default class Spaces extends View {
       .on_mouse_move((e, cx) => this.hoverParent(entry.id, cx, e))
       .on_mouse_up("left", (_e, cx) => this.releaseDrag(r, cx))
       .on_mouse_down("right", () => this.menu(r))
-      .when(nest, el => el.pl(8 + 14 * depth))
-      .child(svg(nest ? "mods/workspace-chrome/folder.svg" : "mods/workspaces/parent.svg").size(18).flex_none().text_color(t.muted))
+      .when(nest, el => el.pl(8 + 15 + 14 * depth))
+      .when(!nest, el => el.child(colorDot(t, colorOf(entry))))
+      .child(svg("mods/workspaces/space.svg").size(16).flex_none().text_color(t.muted))
       .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(entry.name))
       .when(entry.pinned, el => el.child(svg("mods/workspace-chrome/pin.svg").size(12).flex_none().text_color(t.dim)))
       .when(kids > 0, el => el.child(this.chevron(entry, t)));
@@ -638,6 +681,28 @@ export default class Spaces extends View {
       .on_click(() => run("space.select", { id: w.id }))
       .child(div().text_color(w.active ? t.foreground : t.muted).child(String(i + 1)))
       .child(div().text_color(tone(t, w.status)).child(glyph(w.status)));
+  }
+
+  // A foldable "Tags" list under the header: pick one tag to keep only its spaces, "All Tags" shows every space.
+  tagFilters(t) {
+    const used = new Set((shared("workspace.tree") ?? EMPTY).entries.filter((e) => !e.parent).map(colorOf));
+    if (this.tagFilter && !used.has(this.tagFilter)) this.tagFilter = null;
+    const folded = localStorage.getItem("tags.folded") === "1";
+    const item = (id, on, icon, label, pick) => h_flex().id(id).h(28).flex_none().px(8).gap(10).items_center().rounded(7)
+      .text_size(13).text_color(t.foreground).when(on, el => el.bg(t.selected)).when(!on, el => el.hover(s => s.bg(t.hover)))
+      .on_click((_e, cx) => { this.tagFilter = pick; cx.notify(); })
+      .child(icon).child(div().flex_1().min_w(0).truncate().child(label));
+    const all = h_flex().size(14).flex_none().items_center()
+      .child(div().size(10).rounded(5).border_1().border_color(t.muted))
+      .child(div().size(10).rounded(5).border_1().border_color(t.muted).ml(-6));
+    return v_flex().flex_none().px(8).pb(6)
+      .child(h_flex().id("tags-head").h(26).px(8).items_center().justify_between().text_size(11.5).text_color(t.dim).cursor_pointer()
+        .on_click((_e, cx) => { localStorage.setItem("tags.folded", folded ? "0" : "1"); cx.notify(); })
+        .child("Tags").child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11)))
+      .when(!folded, el => el
+        .children(COLORS.filter(([, key]) => used.has(key)).map(([, key]) =>
+          item(`tag-filter-${key}`, this.tagFilter === key, colorDot(t, key).size(12).rounded(6).mx(1), tagName(key), this.tagFilter === key ? null : key)))
+        .child(item("tag-filter-all", !this.tagFilter, all, "All Tags…", null)));
   }
 
   render() {
@@ -665,6 +730,8 @@ export default class Spaces extends View {
       .child(v_flex().flex_1().min_h(0).px(8).pb(14).overflow_y_scrollbar().mode("always")
         .on_mouse_move((_e, cx) => this.hoverParent(null, cx))
         .on_mouse_up("left", (_e, cx) => { if (this.pressed) this.releaseRoot(cx); })
-        .children(this.grouped(t, collapsed)));
+        .children(this.grouped(t, collapsed)))
+      // Last: sits just above the Agents panel below this block.
+      .when(!collapsed, el => el.child(this.tagFilters(t).pt(6).border_t_1().border_color(t.border)));
   }
 }

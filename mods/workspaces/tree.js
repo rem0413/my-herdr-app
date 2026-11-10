@@ -1,5 +1,5 @@
 // Workspace tree state kept in shared("workspace.tree"):
-// { entries: [{ id, space, parent, manual, pinned, folded, name, named, folder, machine }],
+// { entries: [{ id, space, parent, manual, pinned, folded, color, name, named, folder, machine }],
 //   reopen: { id, at } | null }
 // `space` is the core space id; an entry whose space is not live is "closed".
 // Pure functions only: callers write results with setShared.
@@ -92,6 +92,8 @@ const update = (state, id, change) => ({
 
 export const togglePin = (state, id) => update(state, id, { pinned: !state.entries.find((entry) => entry.id === id)?.pinned });
 export const toggleFold = (state, id) => update(state, id, { folded: !state.entries.find((entry) => entry.id === id)?.folded });
+// `color`: a theme color name ("ansi1"), null clears it.
+export const setColor = (state, id, color) => update(state, id, { color });
 
 export function setParent(state, id, parent) {
 	return canParent(state.entries, id, parent) ? update(state, id, { parent, manual: true }) : state;
