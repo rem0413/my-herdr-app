@@ -19,7 +19,6 @@
 !/mods/
 /mods/*
 !/mods/agent-resume
-!/mods/image-viewer
 !/mods/mod-manager
 !/mods/ports
 !/mods/status-ports
