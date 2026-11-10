@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hibernate mod.json",
+  "description": "What Herdr reads from Hibernate's mod.json, and the settings it takes.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "This file's schema, for editors."
+    },
+    "title": {
+      "type": "string",
+      "description": "The mod's name, as Herdr shows it."
+    },
+    "place": {
+      "enum": [
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "none"
+      ],
+      "description": "Where Herdr first docks the mod."
+    },
+    "settings": {
+      "type": "object",
+      "title": "Hibernate",
+      "properties": {
+        "wake": {
+          "title": "Wake sleeping spaces",
+          "description": "Manual: only from the space menu or the resource meter. On open: when you go to the space. On start: when Herdr opens.",
+          "enum": [
+            "manual",
+            "open",
+            "start"
+          ],
+          "default": "manual",
+          "x-labels": {
+            "manual": "Manual",
+            "open": "On open",
+            "start": "On start"
+          }
+        },
+        "after_restart": {
+          "title": "After a restart",
+          "description": "For agents and programs a reboot stopped. Ask lists them to pick from; programs you exited yourself are never offered.",
+          "enum": [
+            "ask",
+            "auto",
+            "off"
+          ],
+          "default": "ask",
+          "x-labels": {
+            "ask": "Ask",
+            "auto": "Automatic",
+            "off": "Off"
+          }
+        }
+      }
+    }
+  }
+}

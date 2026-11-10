@@ -480,10 +480,24 @@ export default class Spaces extends View {
       .child(svg(`mods/workspace-chrome/chevron-${entry.folded ? "right" : "down"}.svg`).size(11).text_color(t.dim));
   }
 
+  // One button, two states: moon puts the space's programs to sleep (hibernate mod), sun wakes them.
+  // Remote spaces can't sleep. Shown while asleep, otherwise on hover or when the space is selected.
+  sleepToggle(w, asleep, t) {
+    if (w.machine) return div();
+    return div().id(`sleep-${w.id}`).flex_none().p(2).rounded(4).hover(s => s.bg(t.hover).text_color(t.foreground))
+      .text_color(asleep ? t.accent : t.dim)
+      .tooltip(asleep ? "Wake: resume its programs" : "Sleep: stop its programs, keep the shells")
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_mouse_up("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation(); setShared("hibernate.request", { nonce: Date.now(), action: asleep ? "wake" : "sleep", space: w.id }); })
+      .child(svg(`mods/hibernate/${asleep ? "sun" : "moon"}.svg`).size(12));
+  }
+
   row(r, t) {
     const { w, i, g, entry, depth, kids } = r;
     const on = w.active;
     const nest = depth > 0;
+    const asleep = Boolean(shared("hibernate.sleeping")?.[w.id]);
     const icon = nest ? "mods/workspace-chrome/folder.svg" : "mods/workspaces/parent.svg";
     return v_flex()
       .relative()
@@ -499,6 +513,7 @@ export default class Spaces extends View {
       .when(this.pressed !== null && this.pressed !== entry.id && this.over === entry.id, el => this.parentDrop ? el.bg(t.selected).border(1).border_color(t.accent) : el.child(div().absolute().left(0).right(0).h(2).bg(t.accent).when(this.afterDrop, line => line.bottom(0)).when(!this.afterDrop, line => line.top(0))))
       .on_mouse_down("left", (_e, cx) => this.startDrag(entry, cx))
       .on_mouse_move((e, cx) => this.hoverParent(entry.id, cx, e))
+      .on_hover((over, cx) => { if (over) this.hovered = w.id; else if (this.hovered === w.id) this.hovered = null; cx.notify(); })
       .on_mouse_up("left", (_e, cx) => this.releaseDrag(r, cx))
       .on_mouse_down("right", () => this.menu(r))
       .child(
@@ -507,8 +522,9 @@ export default class Spaces extends View {
           .items_center()
           .when(nest, el => el.pl(8 + 14 * depth))
           .child(svg(icon).size(18).flex_none().text_color(t.muted))
-          .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
+          .child(div().flex_shrink(0).max_w(150).truncate().text_color(asleep ? t.dim : t.foreground).child(w.name))
           .child(g ? this.gitTail(g, nest, w.name, t) : div().flex_1())
+          .when(asleep || on || this.hovered === w.id, el => el.child(this.sleepToggle(w, asleep, t)))
           .when(entry.pinned, el => el.child(svg("mods/workspace-chrome/pin.svg").size(12).flex_none().text_color(t.dim)))
           .when(kids > 0, el => el.child(this.chevron(entry, t))),
       );

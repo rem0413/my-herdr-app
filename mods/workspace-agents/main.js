@@ -246,7 +246,9 @@ export default class Agents extends View {
     if (props()?.sortMenu) return this.sortMenu(t);
     const collapsed = narrow();
     const sort = sortOf();
-    let list = agents();
+    // A hibernated space (hibernate mod) has no agents to show until it wakes.
+    const asleep = shared("hibernate.sleeping") ?? {};
+    let list = agents().filter((a) => !asleep[a.space]);
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     this.omp.update(list, cx);
     const all = [...terminals(), ...this.omp.nodes];

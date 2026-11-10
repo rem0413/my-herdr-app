@@ -215,6 +215,16 @@
       "size": {
         "px": 0
       }
+    },
+    {
+      "id": "hibernate",
+      "type": "block",
+      "content": {
+        "mod": "hibernate"
+      },
+      "size": {
+        "px": 0
+      }
     }
   ],
   "divider": {
