@@ -1,5 +1,0 @@
-{
-  "app": "image-viewer-app",
-  "description": "Shows one image file: it fits the pane, or you zoom it from 10% to 800% and scroll. The files-md menu item Open in Image Viewer opens images in it.",
-  "readme": "https://github.com/dougcunha/herdr-mods/tree/main/image-viewer-app"
-}

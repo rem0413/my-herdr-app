@@ -1,5 +1,0 @@
-{
-  "place": "none",
-  "title": "Image Viewer",
-  "overlay": { "kind": "dialog", "width": 920, "height": 0.85 }
-}
