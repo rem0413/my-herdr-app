@@ -16,10 +16,31 @@ function location() {
 const key = () => JSON.stringify(location());
 
 // One tab per file (file-editor), reused through shared("editor.tabs"). The tab gets its icon in props.
+// Images open in image-viewer instead, reusing a viewer tab with the same name. The viewer reads
+// local files only, so a remote image is first copied to /tmp/herdr-remote-img/<machine>/<path>.
+// The viewer stages its own copy within seconds, so each remote open sweeps copies older than 1 hour.
+// ponytail: reuse matches tab name (run() returns no tab id); same-named images in other folders reuse it. Track ids if that bites.
+const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|ico|tiff?)$/i;
+function openImage(space, file, name) {
+  const tabs = spaces().find(s => s.id === space)?.tabs ?? [];
+  const hit = panes().find(p => p.mod === "image-viewer" && tabs.some(x => x.id === p.tab && x.name === name));
+  if (hit) run("tab.select", { id: hit.tab });
+  else run("tab.new", { name, space, mod: "image-viewer", props: { file } });
+}
 function openFile(space, path, on, icon) {
+  const name = path.split("/").pop();
+  if (IMAGE.test(path)) {
+    if (!on) return openImage(space, path, name);
+    const dir = "/tmp/herdr-remote-img", local = `${dir}/${on}${path}`;
+    const script = 'find "$4" -type f -mmin +60 -delete 2>/dev/null; find "$4" -type d -empty -delete 2>/dev/null; mkdir -p "$(dirname "$3")" && hc exec --on "$1" -- cat -- "$2" > "$3"';
+    exec("sh", ["-c", script, "img", on, path, local, dir], { timeout: 60000 })
+      .then(r => r.code === 0 ? openImage(space, local, name) : Promise.reject(new Error(r.stderr.trim() || "copy failed")))
+      .catch(e => notify({ title: `Cannot open ${name} from ${on}`, body: String(e?.message ?? e), level: "error" }));
+    return;
+  }
   const tab = (shared("editor.tabs") ?? {})[`${space}|${path}`];
   if (tab && spaces().some(s => s.id === space && s.tabs.some(x => x.id === tab))) run("tab.select", { id: tab });
-  else run("tab.new", { name: path.split("/").pop(), space, mod: "file-editor", props: { file: path, on, space, icon } });
+  else run("tab.new", { name, space, mod: "file-editor", props: { file: path, on, space, icon } });
 }
 // The file whose editor tab is shown in that space.
 function shownFile(space) {

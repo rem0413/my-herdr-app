@@ -4,5 +4,11 @@
     "path": "agent-resume-app/mods/agent-resume",
     "ref": "main",
     "commit": "9928b73edc0c2f974a9d1c9a3ae5d63b06dd1ec5"
+  },
+  "image-viewer": {
+    "repo": "https://github.com/dougcunha/herdr-mods",
+    "path": "image-viewer-app/mods/image-viewer",
+    "ref": "main",
+    "commit": "9928b73edc0c2f974a9d1c9a3ae5d63b06dd1ec5"
   }
 }
