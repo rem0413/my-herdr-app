@@ -105,6 +105,9 @@ function reopen(state, entry) {
   run("space.new", args);
 }
 
+// The + buttons open the Add a space dialog (browse / clone / create, on any connected host).
+const addSpace = (machine = null) => openOverlay({ mod: "add-space", kind: "dialog", width: 420, props: { machine } });
+
 export default class Spaces extends View {
   init(_props, cx) {
     // The right-click menu is this mod opened as a popup: no lists to keep.
@@ -521,12 +524,12 @@ export default class Spaces extends View {
               .on_click((_e, cx) => { cx.stop_propagation(); this.reconnect(machine, cx); })
               .child(repair?.busy ? "Connecting…" : "Connect"))))
           .when(connected, el => el.child(div().id(`machine-add-${m ?? "local"}`).flex_none().px(4).rounded(4).hover(s => s.bg(t.hover).text_color(t.foreground))
-            .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m ?? "" }); }).child("+")))
+            .on_click((_e, cx) => { cx.stop_propagation(); addSpace(m); }).child("+")))
           .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
           .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
       const empty = h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(8).gap(7).items_center().rounded(7)
         .text_size(12).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
-        .on_click(() => run("space.new", { machine: m ?? "" }))
+        .on_click(() => addSpace(m))
         .child(svg("mods/workspace-chrome/plus.svg").size(12)).when(!collapsed, el => el.child("New space there"));
       if (!collapsed && rebuilt) return [head];
       // Rows sit one step in from their machine header.
@@ -841,7 +844,7 @@ export default class Spaces extends View {
       .child(h_flex().h(36).pl(8).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim).border_b_1().border_color(t.border)
         .when(!collapsed, el => el.child(listTabs(t, "spaces")))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
-          .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
+          .on_click(() => addSpace()).child(svg("mods/workspace-chrome/plus.svg").size(14))))
       .child(v_flex().flex_1().min_h(0).px(8).pb(14).overflow_y_scrollbar().mode("always")
         .on_mouse_move((_e, cx) => this.hoverParent(null, cx))
         .on_mouse_up("left", (_e, cx) => { if (this.pressed) this.releaseRoot(cx); })
