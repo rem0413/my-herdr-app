@@ -86,7 +86,7 @@ export default class Tabs extends View {
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
         .when(Boolean(program?.icon) && !edit, el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
-        .when(Boolean(edit), el => el.child(svg(edit.icon?.path ?? "mods/my-files/icons/file.svg").size(13).text_color(edit.icon?.color ?? t.muted)))
+        .when(Boolean(edit), el => el.child(edit.icon?.tint === false ? image(edit.icon.path).size(13) : svg(edit.icon?.path ?? "mods/my-files/icons/file.svg").size(13).text_color(edit.icon?.color ?? t.muted)))
         .child(div().flex_1().min_w(0).truncate().when(Boolean(edit?.git), el => el.text_color(gitColor))
           .when((shared("editor.preview") ?? {})[space.id] === c.id, el => el.italic().text_color(t.dim)).child(label))
         .when(Boolean(edit?.git), el => el.child(div().text_size(11).text_color(gitColor).child(edit.git)))

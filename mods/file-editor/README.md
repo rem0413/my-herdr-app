@@ -5,6 +5,7 @@
 - Single-click: reusable preview tab, italic label. Double-click file/tab or click Keep: retain tab. First edit also retains it.
 - Toolbar: Save, Reload (discards buffer edits), Copy, soft wrap. Save: Cmd-S/Ctrl-S; wrap: Alt-Z.
 - Markdown and SVG: Preview/Code. Raster images: Fit, zoom steps, actual size; Cmd/Ctrl-wheel zooms.
+- PDF (macOS only): one page at a time, rendered to PNG by PDFKit through `osascript`; ‹ › buttons or Left/Right/Page Up/Page Down turn pages, plus Fit/zoom. Remote PDFs: maximum 6 MiB.
 - Clean files reload after disk changes. Dirty buffers show a conflict banner; save refuses a file changed since load.
 - Disk/git polling: 3 seconds for shown tabs in the foreground window, otherwise 30 seconds.
 - Above 150 KiB: plain editor without highlighting/folding. Above 1 MiB: first 1 MiB only, read-only. Markdown above 300 KiB opens as code.

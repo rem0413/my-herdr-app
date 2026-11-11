@@ -80,7 +80,7 @@ export default class Pane extends View {
     const edit = file ? (shared("editor.state") ?? {})[p.tab] : null;
     const gitColor = edit?.git === "U" || edit?.git === "A" ? "#73c991" : edit?.git === "D" || edit?.git === "!" ? "#e06c75" : "#e5a54b";
     const name = file ? file.split("/").pop() : ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
-    const pic = file ? svg(edit?.icon?.path ?? "mods/my-files/icons/file.svg").size(14).flex_none().text_color(edit?.icon?.color ?? t.dim) : icon(p.program, 14, t.dim);
+    const pic = file ? (edit?.icon?.tint === false ? image(edit.icon.path).w(14).h(14).flex_none() : svg(edit?.icon?.path ?? "mods/my-files/icons/file.svg").size(14).flex_none().text_color(edit?.icon?.color ?? t.dim)) : icon(p.program, 14, t.dim);
     const st = p.status;
     const pane = p.pane;
     return h_flex()

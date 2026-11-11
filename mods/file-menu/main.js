@@ -4,7 +4,7 @@
 // Open in apps: file-editor.json "openWith": [{ name, app }] (macOS app names for `open -a`).
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, closeOverlay, openOverlay, run, exec, readTextFile, appHome, theme, notify, setShared, shared } from "herdr";
+import { props, closeOverlay, openOverlay, run, exec, readTextFile, appHome, home, theme, notify, setShared, shared } from "herdr";
 
 const I = (n) => `mods/file-menu/icons/${n}.svg`;
 const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -58,19 +58,30 @@ export default class FileMenu extends View {
     cx.spawn(async () => { await this.sh(script, `Could not duplicate ${base(p)}`); this.close(); });
   }
 
-  // Remote file -> ~/Downloads here, through hc exec (8 MB per call, like pane-drop/upload.sh in reverse).
-  download(cx) {
+  // Remote file or folder -> ~/Downloads here, as a my-files transfer job (progress and Cancel in the Files panel).
+  download() {
     const { path, on } = this.p;
     this.close();
-    cx.spawn(async () => {
-      const dest = `$HOME/Downloads/${base(path)}`;
-      const script = this.p.dir
-        ? `hc exec --on ${q(on)} -- tar -C ${q(parent(path))} -cf - ${q(base(path))} | tar -C "$HOME/Downloads" -xf -`
-        : `hc exec --on ${q(on)} -- cat ${q(path)} > "${dest}"`;
-      const r = await exec("sh", ["-c", script]).catch((e) => ({ code: 1, stderr: String(e) }));
-      notify(r.code === 0 ? { title: `Downloaded ${base(path)}`, body: "~/Downloads", level: "success", timeout: 3000 }
-        : { title: `Download failed: ${base(path)}`, body: r.stderr, level: "error" });
-    });
+    setShared("files.job", { mode: "down", machine: on, src: path, dest: `${home()}/Downloads`, label: `↓ ${base(path)}` });
+  }
+
+  // Calculate Size: my-files runs du (this popup closes before it finishes) and shows the size by the folder.
+  calcSize() { setShared("files.size", { on: this.p.on ?? null, path: this.p.path }); this.close(); }
+
+  // Copy for Paste: a file or folder on any machine; Paste copies it into the target folder, through this
+  // computer when the machines differ (transfer.sh), with cp when they are the same.
+  mark() { setShared("files.clip", { on: this.p.on ?? null, path: this.p.path }); this.close(); }
+
+  paste(cx) {
+    const clip = shared("files.clip"), { path, dir, on } = this.p, folder = dir ? path : parent(path);
+    this.close();
+    if (!clip) return;
+    const from = clip.on ?? null, to = on ?? null, label = `${base(clip.path)} → ${base(folder)}`;
+    if (from === to) {
+      cx.spawn(async () => { await this.sh(`t=${q(folder)}/${q(base(clip.path))}; [ ! -e "$t" ] || { echo "\${t##*/} already exists" >&2; exit 1; }; cp -R -p ${q(clip.path)} "$t"`, `Could not paste ${base(clip.path)}`); });
+    } else if (!from) setShared("files.job", { mode: "up", machine: to, src: clip.path, dest: folder, label: `↑ ${label}` });
+    else if (!to) setShared("files.job", { mode: "down", machine: from, src: clip.path, dest: folder, label: `↓ ${label}` });
+    else setShared("files.job", { mode: "cross", machine: from, src: clip.path, dest: `${to}:${folder}`, label: `⇄ ${label}` });
   }
 
   openIn(app, cx) {
@@ -93,7 +104,8 @@ export default class FileMenu extends View {
       .when(Boolean(opts.hint), (el) => el.child(div().text_size(11).text_color(t.dim).child(opts.hint)));
     const sep = () => div().h(1).mx(6).my(4).bg(t.border);
     // frame:"none" popup: we draw each panel's card; the submenu sits beside the main menu.
-    const card = (id, ...kids) => v_flex().id(id).w(MENU_W).flex_none().p(5).bg(t.popover).border_1().border_color(t.border).rounded(10).shadow_lg().children(kids);
+    const card = (id, ...kids) => v_flex().id(id).w(MENU_W).flex_none().p(5).bg(t.popover).border_1().border_color(t.border).rounded(10).shadow_lg().children(kids.filter(Boolean));
+    const clip = shared("files.clip");
 
     // Hovering Open in opens the submenu, any other main row closes it; separators and the submenu keep it.
     const rel = root && path.startsWith(root + "/") ? path.slice(root.length + 1) : base(path);
@@ -104,9 +116,13 @@ export default class FileMenu extends View {
       row("copy-path", I("copy"), "Copy Path", (cx) => this.copy(path, cx), { set: false }),
       row("copy-rel", I("copy"), "Copy Relative Path", (cx) => this.copy(rel, cx), { set: false }),
       row("duplicate", I("duplicate"), "Duplicate", (cx) => this.duplicate(cx), { set: false }),
-      row("download", I("download"), "Download", (cx) => this.download(cx), { disabled: local, hint: local ? "Remote only" : null, set: false }),
+      row("download", I("download"), "Download", () => this.download(), { disabled: local, hint: local ? "Remote only" : null, set: false }),
       row("open-in", I("open-in"), "Open in", (cx) => { this.sub = true; cx.notify(); }, { hint: "›", selected: this.sub, set: true }),
       row("reveal", I("reveal"), "Reveal in Finder", (cx) => this.reveal(cx), { disabled: !local, hint: local ? null : "Local only", set: false }),
+      sep(),
+      row("copy", I("copy"), "Copy", () => this.mark(), { hint: "for Paste", set: false }),
+      row("paste", I("duplicate"), clip ? `Paste ${base(clip.path)}` : "Paste", (cx) => this.paste(cx), { disabled: !clip, hint: clip && (clip.on ?? null) !== (on ?? null) ? (clip.on ?? "this Mac") : null, set: false }),
+      dir ? row("size", I("app"), "Calculate Size", () => this.calcSize(), { set: false }) : null,
       sep(),
       row("rename", I("rename"), "Rename", () => this.create("rename"), { set: false }),
       row("delete", I("delete"), "Delete", () => { this.close(); openOverlay({ mod: "file-dialog", kind: "dialog", width: 560, props: { kind: "delete", path, dir, on, space: this.p.space } }); }, { danger: true, set: false }));

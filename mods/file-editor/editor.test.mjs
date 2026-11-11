@@ -14,7 +14,7 @@ const run = (command, args) => {
   calls.push([command, args]);
   if (command === 'tab.close') tabs = tabs.filter(t => t.id !== args.id);
 };
-const host = { shared, setShared, spaces, run, notify: n => notices.push(n),
+const host = { shared, setShared, spaces, run, notify: n => notices.push(n), hc: async () => ({ code: 0, stdout: '' }), home: () => '',
   panes: () => [], props: () => ({}), theme: () => ({}), settings: () => ({}), window: () => ({}),
   appHome: () => '', exec: async () => { throw new Error('stat unavailable'); },
   readTextFile: path => readFile(path, 'utf8'),
@@ -26,8 +26,9 @@ async function load(path, extra = '') {
   const mod = new vm.SourceTextModule(await readFile(path, 'utf8') + extra);
   await mod.link(async name => {
     const values = name === 'herdr' ? host : name === 'gpui-kit' ? { View: class {}, div() {}, svg() {}, image() {} }
-      : name === 'gpui-base' ? { v_flex() {}, h_flex() {}, Editor: {}, EditorState: {}, TextView: {}, InputState: {}, Input: {} }
-      : name === './lang.js' ? { language() {}, syntaxFor() {} } : { iconFor() {} };
+      : name === 'gpui-base' ? { v_flex() {}, h_flex() {}, Editor: {}, EditorState: {}, TextView: {}, InputState: {}, Input: {}, Scrollbar: {}, v_virtual_list() {} }
+      : name === './lang.js' ? { language() {}, syntaxFor() {} }
+      : name === './search.js' ? { matchFiles() {}, bytes() {}, parseListing() {} } : { iconFor() {} };
     return new vm.SyntheticModule(Object.keys(values), function () { for (const [k, v] of Object.entries(values)) this.setExport(k, v); });
   });
   await mod.evaluate();

@@ -39,7 +39,7 @@
   ],
 
   "icons": {
-    "//": "icon: a name in mods/my-files/icons (code json text image config terminal data lock media file) or a path from ~/.config/herdr-app",
+    "//": "Files uses Material Icon Theme by default. Set \"theme\": \"classic\" here to use the tinted set below instead: icon is a name in mods/my-files/icons (code json text image config terminal data lock media file) or a path from ~/.config/herdr-app",
     "default": { "icon": "file", "color": "#8C8C8C" },
     "folder": { "icon": "folder", "color": "#8C8C8C" },
     "extensions": {

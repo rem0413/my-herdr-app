@@ -7,8 +7,9 @@
 // shared("editor.wrap"): soft wrap on or off, for every tab.
 //
 // Text opens in the editor; Markdown and SVG also have a rendered Preview. Pictures (png, jpg, gif, webp,
-// bmp, ico, tif) show with Fit/zoom. image() only loads files inside the app folder, so pictures (and the
-// SVG preview) are copied to data/file-editor/ (a remote one through base64) and removed when the tab closes.
+// bmp, ico, tif) show with Fit/zoom; PDFs one page at a time (macOS PDFKit renders the page to PNG). image() only
+// loads files inside the app folder, so pictures, PDF pages (and the SVG preview) are copied to data/file-editor/
+// (a remote one through base64) and removed when the tab closes.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
 import { readTextFile, writeTextFile, exec, props, panes, spaces, theme, settings, shared, setShared, notify, appHome, window, run } from "herdr";
@@ -19,6 +20,7 @@ const dir = (p) => p.slice(0, p.length - base(p).length - 1) || "/";
 const ICON = "mods/file-editor";
 const PICTURE = /\.(png|jpe?g|gif|webp|bmp|ico|tiff?)$/i;
 const SVG = /\.svg$/i;
+const PDF = /\.pdf$/i;
 const MARKDOWN = /\.(md|markdown|mdx)$/i;
 const CACHE = "data/file-editor";
 const PLAIN_AT = 150 * 1024;     // larger: no highlighting or folding (they re-parse per keystroke)
@@ -30,6 +32,35 @@ const LANG_NAME = { js: "JavaScript", json: "JSON", yaml: "YAML", html: "HTML", 
   go: "Go", bash: "Shell", sql: "SQL", java: "Java", c: "C", lua: "Lua", ruby: "Ruby", text: "Text", markdown: "Markdown", md: "Markdown" };
 const kb = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
 const hash = (s) => { let h = 5381; for (const c of s) h = ((h << 5) + h + c.charCodeAt(0)) >>> 0; return h.toString(36); };
+
+// `osascript -l JavaScript -e RENDER_SCRIPT <pdf> <page> <png>`: one page as PNG on white, longest edge at most 2048 px,
+// scale at most 2, rotation-aware (boundsForBox ignores /Rotate). Prints one JSON line {pages,page,width,height} or {error}.
+// Adapted from filer-pro preview/pdf.js (MIT).
+const RENDER_SCRIPT = `ObjC.import("PDFKit"); ObjC.import("AppKit");
+function run(argv) {
+  const [src, pageArg, out] = argv;
+  const doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(src));
+  if (doc.isNil()) return JSON.stringify({ error: "broken" });
+  if (doc.isLocked) return JSON.stringify({ error: "locked" });
+  const pages = Number(doc.pageCount);
+  if (pages < 1) return JSON.stringify({ error: "empty" });
+  const n = Math.min(Math.max(1, +pageArg || 1), pages), page = doc.pageAtIndex(n - 1);
+  const box = page.boundsForBox($.kPDFDisplayBoxCropBox), turned = Number(page.rotation) % 180 !== 0;
+  const w = turned ? box.size.height : box.size.width, h = turned ? box.size.width : box.size.height;
+  const scale = Math.min(2, 2048 / Math.max(w, h)), pw = Math.max(1, Math.round(w * scale)), ph = Math.max(1, Math.round(h * scale));
+  const img = page.thumbnailOfSizeForBox($.NSMakeSize(pw, ph), $.kPDFDisplayBoxCropBox);
+  const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(null, pw, ph, 8, 4, true, false, $.NSDeviceRGBColorSpace, 0, 0);
+  $.NSGraphicsContext.saveGraphicsState;
+  $.NSGraphicsContext.setCurrentContext($.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep));
+  $.NSColor.whiteColor.setFill;
+  $.NSRectFill($.NSMakeRect(0, 0, pw, ph));
+  img.drawInRectFromRectOperationFraction($.NSMakeRect(0, 0, pw, ph), $.NSZeroRect, $.NSCompositingOperationSourceOver, 1);
+  $.NSGraphicsContext.restoreGraphicsState;
+  const png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $());
+  if (png.isNil() || !png.writeToFileAtomically(out, true)) return JSON.stringify({ error: "write" });
+  return JSON.stringify({ pages, page: n, width: pw, height: ph });
+}`;
+const PDF_ERRORS = { locked: "PDF is password-protected", empty: "PDF has no pages", broken: "Cannot read this PDF", write: "Cannot write the page image" };
 
 // One exec per poll: "<mtime> <size> <writable>" (or "missing"), then the git porcelain XY of the file.
 const STAT = `f="$1"; if [ ! -e "$f" ]; then echo missing; exit 0; fi
@@ -78,7 +109,9 @@ export default class FileEditor extends View {
     const p = props() ?? {};
     this.file = p.file; this.on = p.on ?? null; this.space = p.space; this.icon = p.icon ?? null;
     this.wantPreview = Boolean(p.preview);
-    this.kind = PICTURE.test(this.file ?? "") ? "picture" : "text";
+    this.kind = PICTURE.test(this.file ?? "") ? "picture" : PDF.test(this.file ?? "") ? "pdf" : "text";
+    this.page = 1;
+    if (this.kind === "pdf") { this.handle = cx.focus_handle(); this.handle.focus(); } // arrow/page keys turn pages
     this.mode = "code";          // "preview" for Markdown and SVG (set on load)
     this.zoom = "fit";
     this.dirty = false;
@@ -106,6 +139,7 @@ export default class FileEditor extends View {
     this.publish({ drop: true });
     this.promote();
     await this.unstage();
+    if (this.pdfCopy) await exec("rm", ["-f", this.pdfCopy]).catch(() => null);
   }
 
   // tab.new focuses the new pane, so the first render finds its tab there.
@@ -164,6 +198,7 @@ export default class FileEditor extends View {
         if (s.missing) { this.error = "This file is no longer on disk"; return; }
         this.stamp = s.stamp; this.size = s.size; this.writable = s.writable; this.git = s.git; this.publish();
         if (this.kind === "picture") return await this.stagePicture(s.size);
+        if (this.kind === "pdf") return await this.stagePdf(s.size);
         let text;
         this.truncated = s.size > READ_MAX;
         if (this.truncated) text = (await exec("head", ["-c", String(READ_MAX), this.file], { on: this.on })).stdout;
@@ -215,14 +250,8 @@ export default class FileEditor extends View {
     await exec("sh", ["-c", 'mkdir -p "$1"; find "$1" -type f -mtime +1 -delete 2>/dev/null; exit 0', "sweep", `${appHome()}/${CACHE}`]);
     const rel = `${CACHE}/${hash(`${this.on}|${this.file}`)}-${Date.now().toString(36)}.${this.file.split(".").pop().toLowerCase()}`;
     const dst = `${appHome()}/${rel}`;
-    if (this.on) {
-      // exec has no binary output: base64 there, decode here.
-      const r = await exec("sh", ["-c", 'base64 < "$1"', "base64", this.file], { on: this.on, timeout: 60000 });
-      if (r.code !== 0) throw new Error(r.stderr.trim() || "cannot read it");
-      await writeTextFile(`${dst}.b64`, r.stdout, null);
-      const d = await exec("sh", ["-c", 'base64 -d < "$1" > "$2"; c=$?; rm -f "$1"; exit $c', "b64", `${dst}.b64`, dst]);
-      if (d.code !== 0) throw new Error(d.stderr.trim() || "cannot decode it");
-    } else {
+    if (this.on) await this.fetchRemote(dst);
+    else {
       const c = await exec("cp", [this.file, dst]);
       if (c.code !== 0) throw new Error(c.stderr.trim() || "cannot copy it");
     }
@@ -231,6 +260,54 @@ export default class FileEditor extends View {
     const w = Number(/pixelWidth:\s*(\d+)/.exec(s?.stdout ?? "")?.[1]), h = Number(/pixelHeight:\s*(\d+)/.exec(s?.stdout ?? "")?.[1]);
     this.dims = w > 0 && h > 0 ? { w, h } : null;
     this.staged = rel;
+  }
+
+  // exec has no binary output: base64 there, decode here.
+  async fetchRemote(dst) {
+    const r = await exec("sh", ["-c", 'base64 < "$1"', "base64", this.file], { on: this.on, timeout: 60000 });
+    if (r.code !== 0) throw new Error(r.stderr.trim() || "cannot read it");
+    await writeTextFile(`${dst}.b64`, r.stdout, null);
+    const d = await exec("sh", ["-c", 'base64 -d < "$1" > "$2"; c=$?; rm -f "$1"; exit $c', "b64", `${dst}.b64`, dst]);
+    if (d.code !== 0) throw new Error(d.stderr.trim() || "cannot decode it");
+  }
+
+  // Local PDFs render from the file itself; remote ones from a copy (fetched again on every load: the stamp changed).
+  async stagePdf(size) {
+    if (window()?.platform !== "macos") { this.error = "PDF preview needs macOS"; return; }
+    if (this.on && size > REMOTE_PICTURE_MAX) { this.error = `Remote PDFs up to ${kb(REMOTE_PICTURE_MAX)} open here (this one is ${kb(size)}).`; return; }
+    await exec("sh", ["-c", 'mkdir -p "$1"; find "$1" -type f -mtime +1 -delete 2>/dev/null; exit 0', "sweep", `${appHome()}/${CACHE}`]);
+    if (this.on) {
+      this.pdfCopy = `${appHome()}/${CACHE}/${hash(`${this.on}|${this.file}`)}.pdf`;
+      await this.fetchRemote(this.pdfCopy);
+    }
+    await this.renderPage(this.page);
+  }
+
+  // Render page n, then drop the previous page's PNG.
+  async renderPage(n) {
+    const src = this.pdfCopy ?? this.file;
+    const rel = `${CACHE}/${hash(`${this.on}|${this.file}`)}-p${n}-${Date.now().toString(36)}.png`;
+    const r = await exec("osascript", ["-l", "JavaScript", "-e", RENDER_SCRIPT, src, String(n), `${appHome()}/${rel}`], { timeout: 30000 });
+    const line = r.stdout.split("\n").map((l) => l.trim()).find((l) => l.startsWith("{"));
+    let out = null;
+    try { out = line ? JSON.parse(line) : null; } catch { out = null; }
+    if (out?.error) { this.error = `${PDF_ERRORS[out.error] ?? out.error} · no preview`; return; }
+    if (!(out?.pages >= 1 && out.width >= 1 && out.height >= 1)) throw new Error((r.stderr || r.stdout).trim().split("\n")[0] || "cannot render it");
+    await this.unstage();
+    this.page = out.page; this.pages = out.pages;
+    this.dims = { w: out.width / 2, h: out.height / 2 };
+    this.staged = rel;
+  }
+
+  goPage(n, cx) {
+    if (this.kind !== "pdf" || !this.pages || this.rendering) return;
+    n = Math.min(Math.max(1, n), this.pages);
+    if (n === this.page) return;
+    this.rendering = true;
+    cx.spawn(async (cx) => {
+      try { await this.renderPage(n); } catch (e) { this.error = `Cannot open: ${e?.message ?? e}`; }
+      finally { this.rendering = false; cx.notify(); }
+    });
   }
 
   async stageSvg(text) {
@@ -312,7 +389,7 @@ export default class FileEditor extends View {
 
   copy(cx) {
     const text = this.state?.value() ?? this.original;
-    if (this.kind === "picture" || text == null) { cx.write_to_clipboard(this.file); notify({ title: "Copied path", body: this.file, timeout: 2000 }); return; }
+    if (this.kind !== "text" || text == null) { cx.write_to_clipboard(this.file); notify({ title: "Copied path", body: this.file, timeout: 2000 }); return; }
     cx.write_to_clipboard(text);
     notify({ title: `Copied ${base(this.file)}`, body: `${this.lines ?? 0} lines`, timeout: 2000 });
   }
@@ -329,9 +406,11 @@ export default class FileEditor extends View {
   }
 
   toolbar(t) {
-    const picture = this.kind === "picture", svgFile = SVG.test(this.file), md = MARKDOWN.test(this.file);
+    const pdf = this.kind === "pdf", picture = this.kind === "picture" || pdf, svgFile = SVG.test(this.file), md = MARKDOWN.test(this.file);
     const showsPicture = picture || (svgFile && this.mode === "preview");
-    const info = picture
+    const info = pdf
+      ? [this.pages && `${this.pages} page${this.pages === 1 ? "" : "s"}`, this.size != null && kb(this.size)]
+      : picture
       ? [this.dims && `${this.dims.w}×${this.dims.h}`, this.size != null && kb(this.size)]
       : [this.lines != null && `${this.lines} lines`, LANG_NAME[this.lang] ?? this.lang, this.size != null && kb(this.size)];
     const notes = [this.on, this.truncated && `showing first ${kb(READ_MAX)} · read-only`, !this.truncated && this.plain && "large · no highlighting",
@@ -346,6 +425,10 @@ export default class FileEditor extends View {
       .when(this.isPreview(), (el) => el.child(this.button(t, "fe-keep", "pin.svg", "Keep this tab open (double-click its tab or file does the same)", () => this.promote())))
       .when(svgFile || md, (el) => el.child(h_flex().flex_none().p(1).gap(1).rounded(5).border_1().border_color(t.border)
         .child(seg("fe-preview", "eye.svg", "Preview", "preview")).child(seg("fe-code", "code.svg", "Code", "code"))))
+      .when(pdf && Boolean(this.pages), (el) => el
+        .child(this.button(t, "fe-prev", "‹", "Previous page (← / Page Up)", (cx) => this.goPage(this.page - 1, cx), { disabled: this.page <= 1 }))
+        .child(div().flex_none().px(4).text_color(t.muted).child(`${this.page} / ${this.pages}`))
+        .child(this.button(t, "fe-next", "›", "Next page (→ / Page Down)", (cx) => this.goPage(this.page + 1, cx), { disabled: this.page >= this.pages })))
       .when(showsPicture, (el) => el
         .child(this.button(t, "fe-fit", "Fit", "Fit the pane", (cx) => { this.zoom = "fit"; cx.notify(); }, { on: this.zoom === "fit" }))
         .child(this.button(t, "fe-zout", "−", "Zoom out (⌘ + wheel)", (cx) => this.step(-1, cx), { disabled: !canZoom }))
@@ -382,7 +465,7 @@ export default class FileEditor extends View {
     const svgFile = SVG.test(this.file ?? "");
     let body;
     if (this.error) body = div().flex_1().p(16).text_color(t.dim).child(this.error);
-    else if (this.kind === "picture" || (svgFile && this.mode === "preview")) body = this.pictureBody(t, svgFile);
+    else if (this.kind !== "text" || (svgFile && this.mode === "preview")) body = this.pictureBody(t, svgFile);
     else if (!this.state) body = div().flex_1().p(16).text_color(t.dim).child(this.file ? "Loading…" : "No file");
     else if (this.mode === "preview") {
       body = div().id("fe-md").flex_1().min_h(0).overflow_y_scrollbar()
@@ -391,9 +474,13 @@ export default class FileEditor extends View {
     } else body = Editor.new(this.state).flex_1().min_h(0);
 
     return v_flex().id("file-editor").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
+      .when(Boolean(this.handle), (el) => el.track_focus(this.handle).on_mouse_down("left", () => this.handle.focus()))
       .on_key_down((e, cx) => {
         if (e.keystroke === "cmd-s" || e.keystroke === "ctrl-s") { this.save(cx); cx.stop_propagation(); }
         else if (e.keystroke === "alt-z" && this.state) { this.toggleWrap(cx); cx.stop_propagation(); }
+        else if (this.kind === "pdf" && ["left", "right", "pageup", "pagedown"].includes(e.keystroke)) {
+          this.goPage(this.page + (e.keystroke === "left" || e.keystroke === "pageup" ? -1 : 1), cx); cx.stop_propagation();
+        }
       })
       // The picture area: the pane minus the toolbar and padding. Sizes come zoomed; w()/h() are not.
       .on_size_change((size, cx) => {
