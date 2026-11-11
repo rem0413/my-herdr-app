@@ -97,6 +97,18 @@ function icon(p, size, color) {
   return p.tint ? svg(p.icon).size(size).flex_none().text_color(color) : image(p.icon).w(size).h(size).flex_none();
 }
 
+// Spaces | Agents tabs over the sidebar-lists stack; same bar as the workspaces mod.
+function listTabs(t, count) {
+  const tab = (id, label, n) => h_flex().id(`lists-tab-${id}`).h(24).px(10).gap(5).items_center().rounded(6).cursor_pointer()
+    .text_size(12).font_medium().text_color(id === "agents" ? t.foreground : t.dim)
+    .when(id === "agents", (el) => el.bg(t.selected))
+    .when(id !== "agents", (el) => el.hover((s) => s.bg(t.hover).text_color(t.foreground)))
+    .on_click(() => run("layout.select", { stack: "sidebar-lists", child: id }))
+    .child(label)
+    .when(n > 0, (el) => el.child(div().px(5).h(16).rounded(4).bg(t.raised).text_size(10.5).text_color(t.muted).flex().items_center().child(String(n))));
+  return h_flex().gap(2).child(tab("spaces", "Spaces", 0)).child(tab("agents", "Agents", count));
+}
+
 export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu) return;
@@ -472,20 +484,19 @@ export default class Agents extends View {
       .size_full()
       .min_h(0)
       .bg(t.chrome)
-      .border_t(1)
-      .border_color(t.border)
       .text_size(13)
       .when(!collapsed, (el) =>
         el.child(
           h_flex()
-            .px(16)
-            .h(41)
-            .pt(14)
-            .pb(5)
+            .pl(8)
+            .pr(10)
+            .h(36)
             .flex_none()
             .items_center()
             .justify_between()
-            .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Agents"))
+            .border_b_1()
+            .border_color(t.border)
+            .child(listTabs(t, list.length))
             .child(
               div()
                 .id("ag-sort")

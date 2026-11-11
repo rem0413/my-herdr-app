@@ -5,10 +5,11 @@
 // its first terminal is in now, only where unusual: branch, ahead/behind. Agent state lives in the agents list, not here. Click to
 // switch (a closed entry opens a new shell where it was), drag to reorder.
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, agents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 import { EMPTY, canParent, flatten, reconcile, setColor, setParent, startReopen, toggleFold, togglePin } from "./tree.js";
+import { PRStatusObserver, prAppearance } from "./pr-status.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -57,6 +58,43 @@ export function tone(t, status) {
   return t[status] ?? t.unknown;
 }
 
+const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
+
+// A program's icon from Herdr's program table; it follows what runs in the pane now.
+function progIcon(p, size, color) {
+  if (!p?.icon) return svg("mods/workspace-chrome/terminal.svg").size(size).flex_none().text_color(color);
+  return p.tint ? svg(p.icon).size(size).flex_none().text_color(color) : image(p.icon).w(size).h(size).flex_none();
+}
+
+// An agent's state, as the agents list draws it.
+function statusMark(t, s) {
+  if (s === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
+  if (s === "blocked") return div().flex_none().px(5).h(16).rounded(4).bg(t.blocked + "26").text_size(10).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
+  if (s === "done") return div().size(7).mx(3).flex_none().rounded(4).bg(t.done);
+  return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
+}
+
+// One step of a tree line in front of a tab row: down from the row above, then right.
+function rail(t, last) {
+  return div().relative().w(10).h(26).flex_none()
+    .child(div().absolute().left(0).top(0).w(1.5).bg(t.input).when(last, (el) => el.h(13)).when(!last, (el) => el.bottom(0)))
+    .child(div().absolute().left(0).top(12).w(9).h(1.5).bg(t.input));
+}
+
+// Spaces | Agents tabs over the sidebar-lists stack; the agents mod draws the same bar.
+export function listTabs(t, on) {
+  const asleep = shared("hibernate.sleeping") ?? {};
+  const count = agents().filter((a) => !asleep[a.space]).length;
+  const tab = (id, label, n) => h_flex().id(`lists-tab-${id}`).h(24).px(10).gap(5).items_center().rounded(6).cursor_pointer()
+    .text_size(12).font_medium().text_color(on === id ? t.foreground : t.dim)
+    .when(on === id, (el) => el.bg(t.selected))
+    .when(on !== id, (el) => el.hover((s) => s.bg(t.hover).text_color(t.foreground)))
+    .on_click(() => run("layout.select", { stack: "sidebar-lists", child: id }))
+    .child(label)
+    .when(n > 0, (el) => el.child(div().px(5).h(16).rounded(4).bg(t.raised).text_size(10.5).text_color(t.muted).flex().items_center().child(String(n))));
+  return h_flex().gap(2).child(tab("spaces", "Spaces", 0)).child(tab("agents", "Agents", count));
+}
+
 // A closed entry comes back as a new space (a fresh shell) where it was, on its machine.
 // The tree adopts that space into the same entry, so its parent, children and pin stay.
 function reopen(state, entry) {
@@ -95,6 +133,8 @@ export default class Spaces extends View {
     this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
     for (const state of Object.values(this.reconnecting)) state.busy = false;
     this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
+    // PRs of each space's checkout via local `gh`; Git runs on the space's machine.
+    this.pr = new PRStatusObserver();
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // `git status` walks the whole tree, on another machine a process there:
@@ -106,8 +146,10 @@ export default class Spaces extends View {
     const now = Date.now();
     const sp = spaces();
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
-    const due = this.due(now, sp, panes());
+    const ps = panes();
+    const due = this.due(now, sp, ps);
     if (due.size) this.refreshGit(due, cx);
+    this.pr.refresh(sp.map((s) => ({ machine: s.machine ?? null, folder: place(s, ps), branch: this.git[where(s, ps)]?.branch ?? null })), cx);
     if (sp.some((s) => !this.shown.has(s.id))) cx.notify();
   }
 
@@ -443,7 +485,8 @@ export default class Spaces extends View {
     const rows = this.ordered()
       .map((r) => ({ ...r, tag: r.depth > 0 ? root : (root = colorOf(r.entry)) }))
       .filter((r) => (!collapsed || !r.closed) && (!this.tagFilter || r.tag === this.tagFilter));
-    const draw = (r) => (collapsed ? this.compact(r, t) : r.closed ? this.closedRow(r, t) : this.row(r, t));
+    const ps = panes(), all = agents();
+    const draw = (r) => (collapsed ? [this.compact(r, t)] : r.closed ? [this.closedRow(r, t)] : [this.row(r, t), ...this.tabRows(r, t, ps, all)]);
     const remote = [...new Set([...rows.map(r => r.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
     const loading = m => {
       const layout = machines().find(k => k.name === m)?.layout;
@@ -451,7 +494,7 @@ export default class Spaces extends View {
         || spaces().some(s => (s.machine ?? null) === m && !this.shown.has(s.id));
     };
     const loadingRow = m => div().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(8).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
-    if (!remote.length) return loading(null) && !rows.length ? [loadingRow(null)] : rows.map(draw);
+    if (!remote.length) return loading(null) && !rows.length ? [loadingRow(null)] : rows.flatMap(draw);
     const machineNames = [null, ...remote];
     return machineNames.flatMap((m) => {
       const mine = rows.filter((r) => r.machine === m);
@@ -488,7 +531,7 @@ export default class Spaces extends View {
       if (!collapsed && rebuilt) return [head];
       // Rows sit one step in from their machine header.
       const inset = el => collapsed ? el : v_flex().flex_none().pl(12).child(el);
-      return [head, ...(folded ? [] : mine.length ? mine.map(r => inset(draw(r))) : [inset(loading(m) ? loadingRow(m) : empty)])];
+      return [head, ...(folded ? [] : mine.length ? mine.flatMap(r => draw(r).map(inset)) : [inset(loading(m) ? loadingRow(m) : empty)])];
     });
   }
 
@@ -505,7 +548,7 @@ export default class Spaces extends View {
       .flex_1()
       .min_w(0)
       .gap(5)
-      .justify_end()
+      .justify_start()
       .items_center()
       .text_size(11.5)
       .text_color(t.dim)
@@ -514,11 +557,73 @@ export default class Spaces extends View {
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
-  chevron(entry, t) {
-    return div().id(`fold-${entry.id}`).flex_none().p(2).rounded(4).hover(s => s.bg(t.hover))
+  // A space's tabs under its row: the program in front now (its icon follows what runs:
+  // a shell, lazygit, nvim, an agent), the tab's name, then its agents' state.
+  tabRows({ w, depth, entry }, t, ps, all) {
+    if (entry.folded || shared("hibernate.sleeping")?.[w.id]) return [];
+    const shownTab = w.active ? focused()?.tab : null;
+    const tabs = (w.tabs ?? []).filter((tab) => !tab.settled);
+    return tabs.map((tab, i) => {
+      const mine = ps.filter((p) => p.tab === tab.id);
+      const lead = mine.find((p) => p.program?.agent) ?? mine.find((p) => p.focused) ?? mine[0];
+      const status = all.filter((a) => a.tab === tab.id).reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
+      const lit = tab.id === shownTab;
+      const prog = lead?.mod ? null : lead?.program?.name;
+      return h_flex()
+        .id(`tab-${tab.id}`)
+        .h(26)
+        .flex_none()
+        // The rail sits under the space's icon.
+        .pl(depth > 0 ? 38 + 14 * depth : 31)
+        .pr(8)
+        .gap(7)
+        .items_center()
+        .rounded(7)
+        .when(lit, (el) => el.bg(t.raised))
+        .when(!lit, (el) => el.hover((s) => s.bg(t.hover)))
+        .on_click(() => { run("space.select", { id: w.id }); run("tab.select", { id: tab.id }); })
+        .child(rail(t, i === tabs.length - 1))
+        .child(progIcon(lead?.program, 14, t.dim))
+        .child(div().flex_shrink(0).max_w(130).truncate().text_size(12.5).text_color(lit ? t.foreground : t.muted).child(tab.name))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(prog && prog !== tab.name ? prog : ""))
+        .when(Boolean(status), (el) => el.child(statusMark(t, status)));
+    });
+  }
+
+  // The checkout's newest PR at the row's right: icon and number in its state's color.
+  // Cmd-click (Ctrl elsewhere) opens it; a plain click still selects the space.
+  prBadge(w, t, ps) {
+    const folder = place(w, ps);
+    const entry = this.pr.entries.get(JSON.stringify([w.machine ?? null, folder]));
+    const pr = entry?.branch === (this.git[where(w, ps)]?.branch ?? null) ? entry.prs[0] : null;
+    if (!pr) return null;
+    const look = prAppearance(pr, t);
+    const url = pr.url || `https://github.com/${pr.repository}/pull/${pr.number}`;
+    const link = (e) => (window().platform === "macos" ? e.modifiers?.platform : e.modifiers?.control || e.modifiers?.platform);
+    return h_flex()
+      .id(`pr-${w.id}`)
+      .flex_none()
+      .gap(3)
+      .items_center()
+      .text_size(11.5)
+      .text_color(look.color)
+      .tooltip(`${pr.repository}#${pr.number} · ${look.label}${entry.error ? " (may be stale)" : ""}\n${pr.title}\n${window().platform === "macos" ? "Cmd" : "Ctrl"}-click to open`)
+      .on_mouse_down("left", (e, cx) => { if (link(e)) cx.stop_propagation(); })
+      .on_mouse_up("left", (e, cx) => { if (link(e)) cx.stop_propagation(); })
+      .on_click((e, cx) => { if (!link(e)) return; cx.stop_propagation(); cx.open_url(url); })
+      .child(svg(`mods/workspaces/pr-${look.icon}.svg`).size(13).flex_none())
+      .child(`#${pr.number}`);
+  }
+
+  // Folded, it says how many tabs the space has (closed entries: none to count).
+  chevron(entry, t, tabs = 0) {
+    return h_flex().id(`fold-${entry.id}`).flex_none().h(18).px(3).gap(3).items_center().rounded(4).text_size(11).text_color(t.dim)
+      .hover(s => s.bg(t.hover).text_color(t.foreground))
+      .when(entry.folded && tabs > 0, el => el.tooltip(`${tabs} tab${tabs > 1 ? "s" : ""}`))
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { cx.stop_propagation(); setShared("workspace.tree", toggleFold(this.tree, entry.id)); })
-      .child(svg(`mods/workspace-chrome/chevron-${entry.folded ? "right" : "down"}.svg`).size(11).text_color(t.dim));
+      .when(entry.folded && tabs > 0, el => el.child(String(tabs)))
+      .child(svg(`mods/workspace-chrome/chevron-${entry.folded ? "right" : "down"}.svg`).size(11));
   }
 
   // One button, two states: moon puts the space's programs to sleep (hibernate mod), sun wakes them.
@@ -566,9 +671,10 @@ export default class Spaces extends View {
           .child(svg(icon).size(16).flex_none().text_color(t.muted))
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(asleep ? t.dim : t.foreground).child(w.name))
           .child(g ? this.gitTail(g, nest, w.name, t) : div().flex_1())
+          .when(Boolean(g), el => el.child(this.prBadge(w, t, panes()) ?? div()))
           .when(asleep || on || this.hovered === w.id, el => el.child(this.sleepToggle(w, asleep, t)))
           .when(entry.pinned, el => el.child(svg("mods/workspace-chrome/pin.svg").size(12).flex_none().text_color(t.dim)))
-          .when(kids > 0, el => el.child(this.chevron(entry, t))),
+          .when(kids > 0 || (w.tabs ?? []).some((tab) => !tab.settled), el => el.child(this.chevron(entry, t, (w.tabs ?? []).filter((tab) => !tab.settled).length))),
       );
   }
 
@@ -615,7 +721,16 @@ export default class Spaces extends View {
     this.over = null;
     this.hoverToken = (this.hoverToken ?? 0) + 1;
     if (id === r.entry.id) {
-      if (r.closed) reopen(this.tree, r.entry);
+      if (r.closed) {
+        // A closed parent kept for its children goes to its first live one; "Open" in the menu starts a shell.
+        const rows = shared("workspace.rows") ?? [];
+        const at = rows.findIndex((x) => x.id === r.entry.id);
+        const live = new Set(spaces().map((s) => s.id));
+        let kid = null;
+        for (let i = at + 1; at >= 0 && i < rows.length && rows[i].depth > rows[at].depth; i++) if (live.has(rows[i].space)) { kid = rows[i].space; break; }
+        if (kid) run("space.select", { id: kid });
+        else reopen(this.tree, r.entry);
+      }
       else run("space.select", { id: r.w.id });
     } else if (id) {
       const saved = shared("workspace.tree") ?? this.tree;
@@ -723,8 +838,8 @@ export default class Spaces extends View {
     }
     if (changed) setShared("space.colors", kept);
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
-      .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
-        .when(!collapsed, el => el.child("Spaces"))
+      .child(h_flex().h(36).pl(8).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim).border_b_1().border_color(t.border)
+        .when(!collapsed, el => el.child(listTabs(t, "spaces")))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
       .child(v_flex().flex_1().min_h(0).px(8).pb(14).overflow_y_scrollbar().mode("always")

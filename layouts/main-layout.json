@@ -27,29 +27,22 @@
             },
             {
               "id": "sidebar-lists",
-              "type": "column",
+              "type": "stack",
+              "active": "spaces",
               "children": [
                 {
                   "id": "spaces",
                   "type": "block",
                   "content": {
                     "mod": "workspaces"
-                  },
-                  "size": {
-                    "weight": 1
-                  },
-                  "min": 90
+                  }
                 },
                 {
                   "id": "agents",
                   "type": "block",
                   "content": {
                     "mod": "workspace-agents"
-                  },
-                  "size": {
-                    "weight": 1
-                  },
-                  "min": 90
+                  }
                 }
               ]
             },
