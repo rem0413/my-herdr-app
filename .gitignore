@@ -9,6 +9,7 @@
 !/file-editor.json
 !/mod-sources.json
 !/update-mods.sh
+!/package.json
 
 # Personal layouts only
 !/layouts/

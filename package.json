@@ -1,0 +1,5 @@
+{
+  "//": "Lets node run the mods tests here: without it, ~/package.json makes the .js files CommonJS.",
+  "private": true,
+  "type": "module"
+}
