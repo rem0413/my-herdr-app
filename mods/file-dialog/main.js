@@ -5,7 +5,7 @@
 // Enter = the primary button, Esc = Cancel.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, closeOverlay, run, exec, theme, notify, shared, setShared } from "herdr";
+import { props, closeOverlay, run, exec, theme, notify, shared, setShared, spaces } from "herdr";
 
 const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 const base = (p = "") => p.split("/").pop();
@@ -20,12 +20,15 @@ export default class FileDialog extends View {
 
   remove(cx) {
     const { path, on, space } = this.p;
+    if (this.busy) return; // a second click or Enter while deleting
     this.busy = true; cx.notify();
     cx.spawn(async (cx) => {
       const r = await exec("sh", ["-c", on ? `rm -rf ${q(path)}` : `trash ${q(path)}`], { on }).catch((e) => ({ code: 1, stderr: String(e) }));
       if (r.code !== 0) { notify({ title: `Could not delete ${base(path)}`, body: r.stderr, level: "error" }); this.busy = false; cx.notify(); return; }
-      const tab = (shared("editor.tabs") ?? {})[`${space}|${path}`];
-      if (tab) run("tab.close", { id: tab, confirmed: true });
+      // The file's tab, or for a folder every file under it (the map also keeps closed tabs).
+      const live = new Set(spaces().find((s) => s.id === space)?.tabs.map((x) => x.id));
+      for (const [key, tab] of Object.entries(shared("editor.tabs") ?? {}))
+        if (live.has(tab) && (key === `${space}|${path}` || key.startsWith(`${space}|${path}/`))) run("tab.close", { id: tab, confirmed: true });
       this.close();
     });
   }
