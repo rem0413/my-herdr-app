@@ -105,7 +105,8 @@ def scan(request):
 
 if __name__ == '__main__':
     try:
-        request = json.loads(sys.argv[1])
+        # argv[1]: a file holding the request (it can be large, and argv shows in ps).
+        request = json.loads(Path(sys.argv[1]).read_text())
         print(json.dumps(scan(request)))
     except Exception as error:
         print(json.dumps({'error': str(error)}))

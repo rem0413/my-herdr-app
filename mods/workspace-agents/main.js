@@ -138,7 +138,7 @@ export default class Agents extends View {
     this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
     this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
     if (!this.pendingPins.length) localStorage.removeItem("pins");
-    this.migratingPins = new Set();
+    this.migratingPins = new Map(); // address -> when terminal.pin was last asked
     cx.timer.every(30000, (cx) => cx.notify());
     this.omp = new OmpChildren(cx);
     // Program keys of known agents, to list panes running one that never reported.
@@ -173,8 +173,9 @@ export default class Agents extends View {
       const terminal = listed.get(address);
       if (!terminal) return true;
       if (terminal.labels?.["herdr.pinned"]) return false;
-      if (!this.migratingPins.has(address)) {
-        this.migratingPins.add(address);
+      // Asked again after a while: a pin the core never echoed (a failed write) isn't lost.
+      if (Date.now() - (this.migratingPins.get(address) ?? 0) > 10000) {
+        this.migratingPins.set(address, Date.now());
         run("terminal.pin", { terminal: address, pinned: true });
       }
       return true;
