@@ -66,8 +66,8 @@ function setLimits(id, next) {
 
 function bar(width, fill, color, t) {
   const w = Math.max(0, Math.min(1, fill ?? 0));
-  return div().relative().w(width).h(6).rounded(3).bg(t.raised).flex_none()
-    .child(div().absolute().left(0).top(0).h(6).rounded(3).w(Math.round(width * w)).bg(color));
+  return div().relative().w(width).h(6).rounded(4).bg(t.raised).flex_none()
+    .child(div().absolute().left(0).top(0).h(6).rounded(4).w(Math.round(width * w)).bg(color));
 }
 
 const keyValues = (text) => Object.fromEntries(String(text ?? "").trim().split(/\s+/)
@@ -295,7 +295,7 @@ export default class Usage extends View {
   }
 
   iconButton(id, name, label, onClick, t, enabled = true) {
-    return div().id(id).size(24).rounded(5).flex().flex_none().items_center().justify_center().tooltip(label)
+    return div().id(id).size(24).rounded(6).flex().flex_none().items_center().justify_center().tooltip(label)
       .when(enabled, (e) => e.cursor_pointer().hover((s) => s.bg(t.hover))
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .on_click((_e, cx) => onClick(cx)))
@@ -356,7 +356,7 @@ export default class Usage extends View {
 
   shell(t) {
     return v_flex().id("ul-card-body").w(CARD_W).p(14).gap(14).rounded(10).border(1).border_color(t.border)
-      .bg(t.popover).shadow_lg().text_size(12.5).text_color(t.foreground)
+      .bg(t.popover).shadow_lg().text_size(12).text_color(t.foreground)
       .on_hover((on, cx) => this.hover(on, cx));
   }
 
@@ -369,7 +369,7 @@ export default class Usage extends View {
         .child(h_flex().gap(6).items_center()
           .child(image(g.icon).size(15))
           .child(div().flex_none().font_semibold().child(g.name))
-          .when(g.plan != null, (e) => e.child(div().flex_none().px(5).rounded(4).bg(t.raised).text_size(10.5).text_color(t.accent).child(g.plan)))
+          .when(g.plan != null, (e) => e.child(div().flex_none().px(5).rounded(4).bg(t.raised).text_size(10).text_color(t.accent).child(g.plan)))
           .child(div().flex_1())
           .child(div().min_w(0).truncate().text_size(11).text_color(g.failed ? levelColor("hot", t) : t.dim).child(g.status)))
         .children(g.rows.map((r) => h_flex().gap(10).items_center()
@@ -391,7 +391,7 @@ export default class Usage extends View {
         .when(s.stats !== "", (e) => e.child(div().text_size(11).text_color(t.dim).child(s.stats))));
     }
     return body.child(h_flex().gap(2).items_center()
-      .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.dim)
+      .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.dim)
         .child("Claude statusLine, codex app-server, local session logs."))
       .child(this.iconButton("ul-report", "chart", "7-day / 30-day usage", () => this.openReport(), t))
       .child(this.iconButton("ul-refresh", "refresh", "Refresh now", () => this.ask(), t))
@@ -402,8 +402,8 @@ export default class Usage extends View {
     return h_flex().id(id).gap(8).items_center().pl(indent).py(3).px(4).rounded(4).cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => { onToggle(); cx.notify(); })
-      .child(div().size(13).flex_none().rounded(3).border(1).border_color(on ? t.accent : t.input).bg(on ? t.accent : t.popover)
-        .flex().items_center().justify_center().text_size(9).text_color(t.accent_foreground).child(on ? "✓" : ""))
+      .child(div().size(13).flex_none().rounded(4).border(1).border_color(on ? t.accent : t.input).bg(on ? t.accent : t.popover)
+        .flex().items_center().justify_center().text_size(10).text_color(t.accent_foreground).child(on ? "✓" : ""))
       .children(label)
       .when(extra != null, (e) => e.child(div().flex_1().min_w(0).flex().justify_end().text_size(11).text_color(t.dim).truncate().child(extra)));
   }
@@ -442,7 +442,7 @@ export default class Usage extends View {
           .child(this.statusError ?? (connected
             ? "Claude statusLine connected; your previous statusLine still runs after it."
             : "Connect Claude Code's statusLine for live Claude limits. Your current statusLine keeps running.")))
-        .child(div().id("ul-statusline").px(8).py(3).rounded(5).flex_none().cursor_pointer().text_size(11.5)
+        .child(div().id("ul-statusline").px(8).py(3).rounded(6).flex_none().cursor_pointer().text_size(11)
           .bg(connected ? t.raised : t.solid).text_color(connected ? t.foreground : t.solid_foreground)
           .hover((s) => s.opacity(0.85))
           .on_click((_e, cx) => this.statusLine(connected ? "uninstall" : "install", cx))
@@ -534,7 +534,7 @@ export default class Usage extends View {
   }
 
   kpi(label, sum, sub, t) {
-    return v_flex().flex_1().flex_basis(0).min_w(0).gap(2).px(10).py(8).rounded(7).bg(t.popover).border(1).border_color(t.border)
+    return v_flex().flex_1().flex_basis(0).min_w(0).gap(2).px(10).py(8).rounded(8).bg(t.popover).border(1).border_color(t.border)
       .child(div().text_size(10).text_color(t.dim).truncate().child(label))
       .child(div().text_size(15).font_semibold().child(sum ? this.costText(sum) : "—"))
       .child(div().text_size(10).text_color(t.muted).truncate().child(sub));
@@ -591,7 +591,7 @@ export default class Usage extends View {
             const parts = stack(c);
             const total = parts.reduce((a, p) => a + p.value, 0);
             const col = v_flex().id(`${id}-c${i}`).flex_1().h_full().justify_end().tooltip(tooltip(c));
-            if (!total) return col.child(div().h(2).rounded(1).bg(t.raised));
+            if (!total) return col.child(div().h(2).rounded(2).bg(t.raised));
             const inner = v_flex().w_full().rounded_t(3).overflow_hidden();
             [...parts].reverse().forEach((p) => {
               if (p.value > 0) inner.child(div().w_full().h(Math.max(2, Math.round((p.value / max) * height))).bg(p.color));
@@ -781,7 +781,7 @@ export default class Usage extends View {
     const t = theme();
     const rep = shared(K_REPORT);
     const content = this.tab === "overview" ? this.overviewTab(rep, t) : this.providerTab(this.tab, rep, t);
-    return v_flex().id("root").size_full().bg(t.popover).text_size(11.5).text_color(t.foreground)
+    return v_flex().id("root").size_full().bg(t.popover).text_size(11).text_color(t.foreground)
       .child(this.header(t))
       .child(v_flex().id("ul-scroll").flex_1().min_h(0).overflow_y_scrollbar().px(14).py(12).gap(12)
         .child(content)

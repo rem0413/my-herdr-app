@@ -9,7 +9,6 @@ import { props, closeOverlay, run, exec, theme, notify, shared, setShared } from
 
 const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 const base = (p = "") => p.split("/").pop();
-const RED = "#e5534b";
 
 export default class FileDialog extends View {
   init(_p, cx) {
@@ -36,9 +35,9 @@ export default class FileDialog extends View {
 
   render() {
     const t = theme(), p = this.p, del = p.kind === "delete";
-    const button = (id, label, style, action) => h_flex().id(id).h(36).px(16).items_center().justify_center().rounded(9).cursor_pointer()
-      .text_size(14).font_medium()
-      .when(style === "danger", (el) => el.bg(RED).text_color("#ffffff").hover((s) => s.opacity(0.88)))
+    const button = (id, label, style, action) => h_flex().id(id).h(36).px(16).items_center().justify_center().rounded(10).cursor_pointer()
+      .text_size(13).font_medium()
+      .when(style === "danger", (el) => el.bg(t.blocked).text_color(t.background).hover((s) => s.opacity(0.88)))
       .when(style === "primary", (el) => el.bg(t.solid).text_color(t.solid_foreground).hover((s) => s.opacity(0.88)))
       .when(style === "plain", (el) => el.border_1().border_color(t.input).bg(t.raised).text_color(t.foreground).hover((s) => s.bg(t.hover)))
       .on_click((_e, cx) => action(cx)).child(label);
@@ -55,10 +54,10 @@ export default class FileDialog extends View {
         if (e.key === "enter") { if (!(del && p.on)) primary(cx); } else if (e.key === "escape") this.close(); else return;
         cx.stop_propagation();
       })
-      .child(div().id("fd-x").absolute().top(14).right(14).size(28).flex().items_center().justify_center().rounded(7).cursor_pointer().text_color(t.muted)
+      .child(div().id("fd-x").absolute().top(14).right(14).size(28).flex().items_center().justify_center().rounded(8).cursor_pointer().text_color(t.muted)
         .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => this.close()).child(svg("mods/file-dialog/close.svg").size(16)))
-      .child(div().pr(28).text_size(17).font_semibold().text_color(t.foreground).child(title))
-      .child(div().pt(8).text_size(14).line_height(1.45).text_color(t.muted).child(`"${base(p.path)}" ${body}`))
+      .child(div().pr(28).text_size(15).font_semibold().text_color(t.foreground).child(title))
+      .child(div().pt(8).text_size(13).line_height(1.45).text_color(t.muted).child(`"${base(p.path)}" ${body}`))
       .child(h_flex().pt(20).gap(10).justify_end()
         .child(button("fd-cancel", "Cancel", "plain", () => this.close()))
         .when(!del, (el) => el.child(button("fd-discard", "Don't Save", "plain", () => this.discard())))

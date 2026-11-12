@@ -43,7 +43,7 @@ export default class Ports extends View {
 	}
 
 	iconButton(id, icon, t, action, danger = false) {
-		return div().id(id).p(4).rounded(5).text_color(t.muted)
+		return div().id(id).p(4).rounded(6).text_color(t.muted)
 			.hover((s) => s.bg(t.hover).text_color(danger ? t.blocked : t.foreground))
 			.on_click((_e, cx) => { cx.stop_propagation(); action(cx); })
 			.child(svg(icon.includes("/") ? icon : `${ICON}/${icon}.svg`).size(14));
@@ -57,7 +57,7 @@ export default class Ports extends View {
 		const key = `${row.machine}:${row.pid}:${row.port}`;
 		const confirming = this.confirming === key;
 		const where = [row.machine, row.address, `pid ${row.pid}`, row.terminal ? `from ${row.terminal}` : row.space ? "in folder" : null].filter(Boolean).join(" · ");
-		const pill = (id, label, bg, fg, action) => div().id(id).px(10).py(3).rounded(5).bg(bg).text_color(fg).text_size(11.5)
+		const pill = (id, label, bg, fg, action) => div().id(id).px(10).py(3).rounded(6).bg(bg).text_color(fg).text_size(11)
 			.hover((s) => s.opacity(0.85))
 			.on_click((_e, cx) => { cx.stop_propagation(); action(cx); })
 			.child(label);
@@ -134,7 +134,7 @@ export default class Ports extends View {
 		// and a long space name is cut with … (the tooltip has it whole).
 		const chip = (id, label, count) => {
 			const on = this.scope === id;
-			return h_flex().id(`scope-${id}`).flex_none().max_w(160).gap(5).px(8).py(3).rounded(6).items_center().text_size(11.5)
+			return h_flex().id(`scope-${id}`).flex_none().max_w(160).gap(5).px(8).py(3).rounded(6).items_center().text_size(11)
 				.border_1().border_color(on ? t.accent : t.border).bg(on ? t.selected : t.popover)
 				.text_color(on ? t.foreground : t.muted).hover((s) => s.text_color(t.foreground))
 				.tooltip(`${label} · ${count} port${count === 1 ? "" : "s"}`)
@@ -171,7 +171,7 @@ export default class Ports extends View {
 				else if (this.confirming) { this.confirming = null; cx.notify(); }
 				else closeOverlay(props().overlay);
 			})
-			.size_full().min_h(0).bg(t.popover).text_size(12.5)
+			.size_full().min_h(0).bg(t.popover).text_size(12)
 			.on_size_change((size, cx) => { if (size.width !== this.width) { this.width = size.width; cx.notify(); } })
 			.child(v_flex().flex_none()
 			.child(h_flex().id("ports-header").px(12).py(10).gap(8).items_center().border_b(1).border_color(t.border)
@@ -182,7 +182,7 @@ export default class Ports extends View {
 				.child(this.iconButton("refresh", "clock", t, () => rescan())))
 			.child(v_flex().px(12).pt(10).pb(8).gap(8)
 				.child(h_flex().gap(8)
-					.child(Input.new(this.input).flex_1().h(32).px(10).rounded(8).border_1().border_color(t.input).bg(t.background).text_size(12.5).text_color(t.foreground))
+					.child(Input.new(this.input).flex_1().h(32).px(10).rounded(8).border_1().border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground))
 					.child(machineButton))
 				.child(h_flex().gap(6).items_center()
 					.child(chip("all", "All", ports.length))

@@ -125,7 +125,7 @@ function listTabs(t, count) {
     .when(id !== "agents", (el) => el.hover((s) => s.bg(t.hover).text_color(t.foreground)))
     .on_click(() => run("layout.select", { stack: "sidebar-lists", child: id }))
     .child(label)
-    .when(n > 0, (el) => el.child(div().px(5).h(16).rounded(4).bg(t.raised).text_size(10.5).text_color(t.muted).flex().items_center().child(String(n))));
+    .when(n > 0, (el) => el.child(div().px(5).h(16).rounded(4).bg(t.raised).text_size(10).text_color(t.muted).flex().items_center().child(String(n))));
   return h_flex().gap(2).child(tab("spaces", "Spaces", 0)).child(tab("agents", "Agents", count));
 }
 
@@ -209,14 +209,14 @@ export default class Agents extends View {
       .w_full()
       .p(5)
       .bg(t.popover)
-      .text_size(12.8)
+      .text_size(13)
       .child(div().px(8).pt(4).pb(6).text_size(11).text_color(t.dim).child("Sort agents"))
       .children(SORTS.map((s) => h_flex()
         .id(`sort-${s.id}`)
         .h(31)
         .px(8)
         .gap(9)
-        .rounded(7)
+        .rounded(8)
         .items_center()
         .text_color(t.foreground)
         .hover((el) => el.bg(t.hover))
@@ -257,7 +257,7 @@ export default class Agents extends View {
       .flex_none()
       .gap(0)
       .items_center()
-      .text_size(12.5)
+      .text_size(12)
       .when(on, (el) => el.bg(t.raised))
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
@@ -271,11 +271,11 @@ export default class Agents extends View {
   status(t, a, compact = false) {
     const color = t[a.status] ?? t.dim;
     if (a.status === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
-    if (a.status === "blocked" && compact) return div().size(14).flex_none().rounded(4).bg(t.blocked + "26").text_size(10.5).font_bold().text_color(t.blocked).flex().items_center().justify_center().child("!");
-    if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
+    if (a.status === "blocked" && compact) return div().size(14).flex_none().rounded(4).bg(t.blocked + "26").text_size(10).font_bold().text_color(t.blocked).flex().items_center().justify_center().child("!");
+    if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(6).bg(t.blocked + "26").text_size(10).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
     // Idle: a ring; done: a dot.
     if (a.status === "idle") return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
-    if (a.status === "unknown") return div().w(13).flex_none().text_size(10.5).font_bold().text_color(t.unknown ?? t.dim).flex().justify_center().child("?");
+    if (a.status === "unknown") return div().w(13).flex_none().text_size(10).font_bold().text_color(t.unknown ?? t.dim).flex().justify_center().child("?");
     return div().size(7).mx(3).flex_none().rounded(4).bg(a.status === "done" ? color : t.dim + "00");
   }
 

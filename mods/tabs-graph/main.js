@@ -66,9 +66,9 @@ export default class Tabs extends View {
       const name = tabTitle(c, pane);
       // file-editor tabs: git letter and unsaved dot.
       const edit = (shared("editor.state") ?? {})[c.id];
-      const gitColor = edit?.git === "U" || edit?.git === "A" ? "#73c991" : edit?.git === "D" || edit?.git === "!" ? "#e06c75" : "#e5a54b";
+      const gitColor = edit?.git === "U" || edit?.git === "A" ? t.ansi2 : edit?.git === "D" || edit?.git === "!" ? t.ansi1 : t.ansi3;
       const label = c.zoomed ? `${name} Z` : name;
-      return h_flex().id(`tab-${c.id}`).w(180).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(11)
+      return h_flex().id(`tab-${c.id}`).w(180).h(29).px(10).gap(7).rounded(8).items_center().flex_none().text_size(11)
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
         .on_mouse_down("left", (e, cx) => {
@@ -92,7 +92,7 @@ export default class Tabs extends View {
         .when(Boolean(edit?.git), el => el.child(div().text_size(11).text_color(gitColor).child(edit.git)))
         .when(Boolean(edit?.dirty), el => el.child(div().size(7).rounded(4).bg(t.foreground)))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
-        .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
+        .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(4).bg(t[c.status])))
         .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); closeTab(c.id, edit); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();

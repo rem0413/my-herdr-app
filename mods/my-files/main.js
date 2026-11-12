@@ -333,8 +333,8 @@ export default class Files extends View {
     const e = this.edit, where = e.kind === "rename" ? `Rename ${base(e.path)}` : `New ${e.kind} in ${e.at || base(this.root)}/`;
     return v_flex().flex_none().px(10).py(6).gap(4).border_b(1).border_color(t.border)
       .child(div().text_size(11).text_color(t.dim).truncate().child(where))
-      .child(Input.new(this.input).h(26).px(6).rounded(6).border_1().border_color(e.editError ? "#e06c75" : t.input).bg(t.background).text_size(13).text_color(t.foreground))
-      .when(Boolean(e.editError), el => el.child(div().text_size(11).text_color("#e06c75").child(e.editError)));
+      .child(Input.new(this.input).h(26).px(6).rounded(6).border_1().border_color(e.editError ? t.ansi1 : t.input).bg(t.background).text_size(13).text_color(t.foreground))
+      .when(Boolean(e.editError), el => el.child(div().text_size(11).text_color(t.ansi1).child(e.editError)));
   }
 
   // ---- drop, jobs
@@ -400,16 +400,16 @@ export default class Files extends View {
 
   jobRows(t) {
     const jobs = shared("files.jobs") ?? [];
-    return v_flex().flex_none().px(10).py(6).gap(6).border_t(1).border_color(t.border).text_size(11.5)
+    return v_flex().flex_none().px(10).py(6).gap(6).border_t(1).border_color(t.border).text_size(11)
       .children(jobs.map(j => {
         const pct = j.total > 0 ? Math.min(100, Math.round(j.bytes / j.total * 100)) : 0;
-        const color = j.state === "failed" ? "#e06c75" : j.state === "done" ? "#73c991" : t.accent;
+        const color = j.state === "failed" ? t.ansi1 : j.state === "done" ? t.ansi2 : t.accent;
         const info = j.state === "running" ? (j.total ? `${bytes(j.bytes)} / ${bytes(j.total)}` : "Packing…") : j.state;
         return v_flex().gap(3)
           .child(h_flex().gap(6).items_center()
             .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(j.label))
             .child(div().flex_none().text_color(t.dim).child(info))
-            .when(j.state === "running", el => el.child(div().id(`job-x-${j.id}`).flex_none().cursor_pointer().text_color(t.dim).hover(s => s.text_color("#e06c75")).tooltip("Cancel")
+            .when(j.state === "running", el => el.child(div().id(`job-x-${j.id}`).flex_none().cursor_pointer().text_color(t.dim).hover(s => s.text_color(t.ansi1)).tooltip("Cancel")
               .on_click(() => this.cancelJob(j)).child(svg(`${ME}/circle-x.svg`).size(13)))))
           .child(h_flex().h(3).rounded(2).bg(t.border).overflow_hidden()
             .child(div().h_full().flex_grow(j.state === "running" ? pct : 100).bg(color))
@@ -447,7 +447,7 @@ export default class Files extends View {
   treeRow(row, t) {
     const { entry, path, depth, open } = row, abs = `${this.root}/${path}`, mark = this.marks[abs];
     const active = !entry.dir && this.shown === abs, preview = active && this.previewShown;
-    const color = mark === "U" || mark === "A" ? "#73c991" : mark === "D" || mark === "!" ? "#e06c75" : "#e5a54b";
+    const color = mark === "U" || mark === "A" ? t.ansi2 : mark === "D" || mark === "!" ? t.ansi1 : t.ansi3;
     const icon = this.icon(path, entry.dir, open), size = this.showSizes ? this.sizeOf(row) : "";
     return h_flex().id(`f-${path}`).h(ROW).flex_none().pl(8 + depth * 16).pr(8).gap(6).items_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover))
       .when(active, el => el.bg(t.selected))
@@ -457,7 +457,7 @@ export default class Files extends View {
       .child(icon.tint ? svg(icon.path).size(15).flex_none().text_color(entry.ignored ? t.dim : icon.color ?? t.muted)
         : image(icon.path).size(15).flex_none().when(entry.ignored, el => el.opacity(0.5)))
       .child(div().flex_1().min_w(0).truncate().text_color(entry.ignored || preview ? t.dim : mark ? color : t.foreground).when(entry.ignored || preview, el => el.italic()).child(entry.name))
-      .when(Boolean(size), el => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(size)))
+      .when(Boolean(size), el => el.child(div().flex_none().text_size(10).text_color(t.dim).child(size)))
       .when(Boolean(mark), el => el.child(div().flex_none().w(10).text_size(11).text_color(color).child(mark)));
   }
 
@@ -474,7 +474,7 @@ export default class Files extends View {
   }
 
   headerButton(t, id, icon, tip, action) {
-    return div().id(id).flex_none().p(4).rounded(5).cursor_pointer().text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+    return div().id(id).flex_none().p(4).rounded(6).cursor_pointer().text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .tooltip(tip).on_click((_e, cx) => action(cx)).child(svg(`${ME}/${icon}`).size(13));
   }
 
@@ -512,7 +512,7 @@ export default class Files extends View {
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).tooltip(this.root ?? "").child(this.root?.split(/[\\/]/).pop() || "/"))
         .child(this.headerButton(t, "files-refresh", "refresh-cw.svg", "Refresh", cx => { this.index = null; this.refresh(cx); })))
       .child(h_flex().flex_none().px(8).py(6).border_b(1).border_color(t.border)
-        .child(Input.new(this.search).flex_1().h(26).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12.5).text_color(t.foreground)))
+        .child(Input.new(this.search).flex_1().h(26).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground)))
       .when(Boolean(this.edit), el => el.child(this.editBar(t)))
       .child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(4).children(rows)
         .when(Boolean(empty), el => el.child(div().p(8).text_size(12).text_color(t.dim).child(empty))))

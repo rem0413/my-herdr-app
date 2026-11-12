@@ -98,7 +98,7 @@ export default class FileMenu extends View {
       .when(!opts.disabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => action(cx)))
       .when(Boolean(opts.selected), (el) => el.bg(t.hover))
       .when(opts.set !== undefined, (el) => el.on_hover((h, cx) => { if (h && this.sub !== opts.set) { this.sub = opts.set; cx.notify(); } }))
-      .text_color(opts.disabled ? t.dim : opts.danger ? "#e06c75" : t.foreground)
+      .text_color(opts.disabled ? t.dim : opts.danger ? t.ansi1 : t.foreground)
       .child(svg(icon).size(15).flex_none())
       .child(div().flex_1().child(label))
       .when(Boolean(opts.hint), (el) => el.child(div().text_size(11).text_color(t.dim).child(opts.hint)));

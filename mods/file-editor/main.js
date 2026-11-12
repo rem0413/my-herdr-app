@@ -404,7 +404,7 @@ export default class FileEditor extends View {
   // ---- view
 
   button(t, id, icon, tip, onClick, { on = false, accent = false, disabled = false } = {}) {
-    return div().id(id).flex_none().h(24).px(6).flex().items_center().rounded(5).tooltip(tip)
+    return div().id(id).flex_none().h(24).px(6).flex().items_center().rounded(6).tooltip(tip)
       .bg(accent ? t.accent : on ? t.selected : t.background)
       .text_color(accent ? t.accent_foreground : on ? t.foreground : disabled ? t.dim : t.muted)
       .when(!disabled, (el) => el.hover((s) => s.bg(accent ? t.accent : t.hover).text_color(accent ? t.accent_foreground : t.foreground))
@@ -422,15 +422,15 @@ export default class FileEditor extends View {
       : [this.lines != null && `${this.lines} lines`, LANG_NAME[this.lang] ?? this.lang, this.size != null && kb(this.size)];
     const notes = [this.on, this.truncated && `showing first ${kb(READ_MAX)} · read-only`, !this.truncated && this.plain && "large · no highlighting",
       this.writable === false && "read-only", this.saving && "Saving…"].filter(Boolean);
-    const seg = (id, icon, label, mode) => h_flex().id(id).h(22).px(8).gap(5).items_center().rounded(4).text_size(11.5)
+    const seg = (id, icon, label, mode) => h_flex().id(id).h(22).px(8).gap(5).items_center().rounded(4).text_size(11)
       .bg(this.mode === mode ? t.selected : t.background).text_color(this.mode === mode ? t.foreground : t.muted)
       .hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => this.setMode(mode, cx))
       .child(svg(`${ICON}/${icon}`).size(13)).child(label);
     const canZoom = Boolean(this.dims);
-    return h_flex().id("fe-bar").h(36).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).bg(t.background).text_size(11.5)
+    return h_flex().id("fe-bar").h(36).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).bg(t.background).text_size(11)
       .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child([...info, ...notes].filter(Boolean).join(" · ")))
       .when(this.isPreview(), (el) => el.child(this.button(t, "fe-keep", "pin.svg", "Keep this tab open (double-click its tab or file does the same)", () => this.promote())))
-      .when(svgFile || md, (el) => el.child(h_flex().flex_none().p(1).gap(1).rounded(5).border_1().border_color(t.border)
+      .when(svgFile || md, (el) => el.child(h_flex().flex_none().p(1).gap(1).rounded(6).border_1().border_color(t.border)
         .child(seg("fe-preview", "eye.svg", "Preview", "preview")).child(seg("fe-code", "code.svg", "Code", "code"))))
       .when(pdf && Boolean(this.pages), (el) => el
         .child(this.button(t, "fe-prev", "‹", "Previous page (← / Page Up)", (cx) => this.goPage(this.page - 1, cx), { disabled: this.page <= 1 }))
@@ -476,7 +476,7 @@ export default class FileEditor extends View {
     else if (!this.state) body = div().flex_1().p(16).text_color(t.dim).child(this.file ? "Loading…" : "No file");
     else if (this.mode === "preview") {
       body = div().id("fe-md").flex_1().min_h(0).overflow_y_scrollbar()
-        .child(h_flex().w_full().justify_center().child(div().w_full().max_w(860).px(28).py(20).text_size(14)
+        .child(h_flex().w_full().justify_center().child(div().w_full().max_w(860).px(28).py(20).text_size(13)
           .child(TextView.markdown(`fe-md-${this.file}`, this.state.value()).selectable(true))));
     } else body = Editor.new(this.state).flex_1().min_h(0);
 
@@ -499,7 +499,7 @@ export default class FileEditor extends View {
       .when(Boolean(this.gone) || Boolean(this.conflict), (el) => el.child(h_flex().h(30).flex_none().px(12).gap(10).items_center()
         .bg(t.blocked + "22").border_b(1).border_color(t.border).text_size(12)
         .child(div().flex_1().text_color(t.foreground).child(this.gone ? "This file was deleted or moved on disk." : "Changed on disk while you were editing."))
-        .when(!this.gone, (el) => el.child(div().id("fe-reload-banner").px(8).py(2).rounded(5).bg(t.raised).hover((s) => s.bg(t.hover))
+        .when(!this.gone, (el) => el.child(div().id("fe-reload-banner").px(8).py(2).rounded(6).bg(t.raised).hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { this.dirty = false; this.publish(); this.load(cx); }).child("Reload, drop my edits")))))
       .child(body);
   }

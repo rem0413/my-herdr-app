@@ -210,15 +210,15 @@ export default class AddSpace extends View {
 
   title(t, text, sub) {
     return v_flex().gap(2).pr(24)
-      .when(this.step !== "start", (el) => el.child(h_flex().id("as-back").mb(6).gap(2).items_center().text_size(11.5).text_color(t.muted)
+      .when(this.step !== "start", (el) => el.child(h_flex().id("as-back").mb(6).gap(2).items_center().text_size(11).text_color(t.muted)
         .cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => this.back(cx))
         .child(icon("chevron-left", 11)).child("Back")))
-      .child(div().text_size(14).font_semibold().text_color(t.foreground).child(text))
+      .child(div().text_size(13).font_semibold().text_color(t.foreground).child(text))
       .when(Boolean(sub), (el) => el.child(div().text_size(12).text_color(t.muted).child(sub)));
   }
 
   closeButton(t) {
-    return div().id("as-close").absolute().top(12).right(12).size(22).flex().items_center().justify_center().rounded(5)
+    return div().id("as-close").absolute().top(12).right(12).size(22).flex().items_center().justify_center().rounded(6)
       .text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
       .tooltip("Close (Esc)").on_click(() => this.close()).child(icon("x", 12));
   }
@@ -227,13 +227,13 @@ export default class AddSpace extends View {
     return h_flex().id(id).h(28).px(8).gap(6).items_center().rounded(6).border_1().border_color(t.input).bg(t.background)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .when(Boolean(lead), (el) => el.child(div().text_color(t.dim).child(icon(lead, 12))))
-      .child(Input.new(state).flex_1().h_full().text_size(12.5).text_color(t.foreground));
+      .child(Input.new(state).flex_1().h_full().text_size(12).text_color(t.foreground));
   }
 
-  label(t, text) { return div().text_size(11.5).font_medium().text_color(t.muted).child(text); }
+  label(t, text) { return div().text_size(11).font_medium().text_color(t.muted).child(text); }
 
   button(t, id, text, onClick, { solid = false, enabled = true } = {}) {
-    return h_flex().id(id).h(28).px(12).flex_none().items_center().rounded(6).text_size(12.5).font_medium().border_1()
+    return h_flex().id(id).h(28).px(12).flex_none().items_center().rounded(6).text_size(12).font_medium().border_1()
       .bg(solid ? t.foreground : t.raised).border_color(solid ? t.foreground : t.border).text_color(solid ? t.background : t.foreground)
       .when(!enabled, (el) => el.opacity(0.45))
       .when(enabled, (el) => el.cursor_pointer().hover((s) => s.opacity(0.85)).on_click((_e, cx) => onClick(cx)))
@@ -322,19 +322,19 @@ export default class AddSpace extends View {
     const trigger = h_flex().id("as-host").h(26).pl(8).pr(6).gap(6).items_center().rounded(6).border_1()
       .border_color(this.hostOpen ? t.input : t.border).bg(this.hostOpen ? t.hover : t.background)
       .cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.toggleHosts(cx))
-      .child(div().size(6).rounded(3).bg(ready ? t.ansi2 : t.blocked))
-      .child(div().text_size(12.5).font_medium().text_color(t.foreground).child(this.host ?? "This computer"))
-      .child(div().text_size(11.5).text_color(t.muted).child(ready ? "Connected" : "Offline"))
+      .child(div().size(6).rounded(4).bg(ready ? t.ansi2 : t.blocked))
+      .child(div().text_size(12).font_medium().text_color(t.foreground).child(this.host ?? "This computer"))
+      .child(div().text_size(11).text_color(t.muted).child(ready ? "Connected" : "Offline"))
       .child(div().text_color(t.dim).child(svg("mods/add-space/chevrons.svg").size(11)));
     const item = (e, i) => {
       const on = i === this.hostAt, chosen = !e.act && !e.ssh && e.m === this.host;
       const right = e.ssh ? (this.connecting === e.ssh ? "Connecting…" : on ? "Connect" : e.sub) : e.sub;
-      return h_flex().id(`as-host-${e.id}`).h(26).px(6).gap(6).items_center().rounded(5).cursor_pointer()
+      return h_flex().id(`as-host-${e.id}`).h(26).px(6).gap(6).items_center().rounded(6).cursor_pointer()
         .when(on, (el) => el.bg(t.hover))
         .on_hover((h, cx) => { if (h && this.hostAt !== i) { this.hostAt = i; cx.notify(); } })
         .on_click((_e, cx) => this.activateHost(e, cx))
         .child(div().w(12).flex_none().text_color(t.foreground).when(chosen || !!e.act, (el) => el.child(icon(e.act ? "plus" : "check", 11))))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(e.ssh ? t.muted : t.foreground).child(e.title))
+        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(e.ssh ? t.muted : t.foreground).child(e.title))
         .when(Boolean(right), (el) => el.child(div().flex_none().text_size(11).text_color(e.ssh && on ? t.foreground : t.dim).child(right)));
     };
     const list = this.hostEntries();
@@ -358,8 +358,8 @@ export default class AddSpace extends View {
       .on_click((_e, cx) => this.go(a.id, cx))
       .child(div().size(26).flex_none().flex().items_center().justify_center().rounded(6).bg(t.raised).text_color(t.foreground).child(icon(a.icon, 13)))
       .child(v_flex().flex_1().min_w(0)
-        .child(div().text_size(12.5).font_medium().text_color(t.foreground).child(a.title))
-        .child(div().truncate().text_size(11.5).text_color(t.muted).child(a.hint)))
+        .child(div().text_size(12).font_medium().text_color(t.foreground).child(a.title))
+        .child(div().truncate().text_size(11).text_color(t.muted).child(a.hint)))
       .when(on, (el) => el.child(div().text_size(11).text_color(t.dim).child("↵")));
   }
 
@@ -370,14 +370,14 @@ export default class AddSpace extends View {
       .child(this.hostPicker(t))
       .child(card([this.row(t, ACTIONS[0], 0, true)]))
       .child(v_flex().gap(6)
-        .child(div().text_size(10.5).font_semibold().text_color(t.dim).child("OTHER WAYS TO ADD"))
+        .child(div().text_size(10).font_semibold().text_color(t.dim).child("OTHER WAYS TO ADD"))
         .child(card(ACTIONS.slice(1).map((a, i) => this.row(t, a, i + 1, i === ACTIONS.length - 2)))))
       .when(Boolean(this.error), (el) => el.child(this.errorLine(t)));
   }
 
   crumbs(t) {
     const parts = (this.dir ?? "").split("/").filter(Boolean);
-    const nav = (id, tip, child, onClick) => div().id(id).size(22).flex_none().flex().items_center().justify_center().rounded(5)
+    const nav = (id, tip, child, onClick) => div().id(id).size(22).flex_none().flex().items_center().justify_center().rounded(6)
       .text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip).on_click(onClick).child(child);
     const crumb = (label, path, last) => div().id(`as-crumb-${path}`).flex_none().px(2).text_size(12)
       .text_color(last ? t.foreground : t.muted).when(last, (el) => el.font_medium())
@@ -401,11 +401,11 @@ export default class AddSpace extends View {
       : list.length === 0 ? note(this.filter.value().trim() ? "Press Enter to go to that path." : "No folders here.")
       : v_flex().size_full().p(4).overflow_y_scrollbar().track_scroll(this.scroll).children(list.map((d, i) => {
         const on = i === this.at;
-        return h_flex().id(`as-dir-${d}`).h(26).flex_none().px(8).gap(8).items_center().rounded(5).cursor_pointer()
+        return h_flex().id(`as-dir-${d}`).h(26).flex_none().px(8).gap(8).items_center().rounded(6).cursor_pointer()
           .when(on, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => this.load(this.join(d), cx))
           .child(div().text_color(t.muted).child(icon("folder", 12)))
-          .child(div().flex_1().truncate().text_size(12.5).text_color(t.foreground).child(d))
+          .child(div().flex_1().truncate().text_size(12).text_color(t.foreground).child(d))
           .child(div().text_color(t.dim).child(icon("chevron-right", 10)));
       }));
     return v_flex().gap(10)
@@ -415,7 +415,7 @@ export default class AddSpace extends View {
       .child(div().h(240).rounded(8).border_1().border_color(t.border).bg(t.background).overflow_hidden().child(body))
       .when(Boolean(this.error), (el) => el.child(this.errorLine(t)))
       .child(h_flex().pt(4).gap(6).items_center()
-        .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(this.tilde(this.dir) || "…"))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(this.tilde(this.dir) || "…"))
         .child(this.button(t, "as-cancel", "Cancel", () => this.close()))
         .child(this.button(t, "as-select", "Open here", () => this.open(this.dir), { solid: true, enabled: Boolean(this.dir) && !this.loading })));
   }
@@ -451,7 +451,7 @@ export default class AddSpace extends View {
         name && loc ? `→ ${loc}/${name}` : "", "Create", "Creating…", (cx) => this.create(cx));
     } else content = this.start(t);
     return v_flex().id("add-space").relative().track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
-      .w_full().p(16).bg(t.popover).text_size(12.5)
+      .w_full().p(16).bg(t.popover).text_size(12)
       .child(content)
       .child(this.closeButton(t));
   }

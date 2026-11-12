@@ -343,7 +343,7 @@ export default class GitGraph extends View {
       .content(v_flex().id(`${id}-list`).w(280).max_h(340).overflow_y_scrollbar().p(4).mt(4).bg(t.popover).border_1().border_color(t.border).rounded(8).shadow_md()
         .children(items.map((it, k) => it.header
           ? div().px(8).pt(6).pb(2).text_size(10).text_color(t.dim).child(it.header)
-          : h_flex().id(`${id}-${k}`).h(26).flex_none().px(6).gap(6).items_center().rounded(5).cursor_pointer().hover((s) => s.bg(t.hover))
+          : h_flex().id(`${id}-${k}`).h(26).flex_none().px(6).gap(6).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
             .on_click((_e, cx) => { this.menu = null; pick(it.value, cx); })
             .child(div().w(14).flex_none().when(it.value === current, (e) => e.child(svg(ICON + "check.svg").size(12).text_color(t.accent))))
             .child(div().flex_1().min_w(0).truncate().text_color(it.dim ? t.muted : t.foreground).child(it.label)))));
@@ -380,7 +380,7 @@ export default class GitGraph extends View {
           (v, cx) => this.reload(cx, () => { this.branch = v; }), t)))
       .child(h_flex().id("gg-remote").gap(6).items_center().cursor_pointer()
         .on_click((_e, cx) => this.reload(cx, () => { this.showRemote = !this.showRemote; if (this.branches.find((b) => b.name === this.branch)?.remote) this.branch = null; }))
-        .child(div().w(14).h(14).flex_none().flex().items_center().justify_center().rounded(3).border_1()
+        .child(div().w(14).h(14).flex_none().flex().items_center().justify_center().rounded(4).border_1()
           .border_color(this.showRemote ? t.accent : t.input).when(this.showRemote, (e) => e.bg(t.accent).text_color(t.accent_foreground).child(svg(ICON + "check.svg").size(10))))
         .child(div().child("Show Remote Branches")))
       .child(div().flex_1())

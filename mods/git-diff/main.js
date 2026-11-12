@@ -8,8 +8,9 @@ import { pairRows, unifiedRows, countPatch } from "./diff.js";
 //   { repo, on, hash, path?, subject?, author?, time? }  a commit (path: one file, else every file)
 //   { repo, on, path, worktree: true, untracked? }       HEAD ↔ working tree of one file
 // shared("git-diff.mode") is "split" (default) or "unified"; source-control toggles it too.
+const ADD = () => theme().ansi2 ?? "#3fb950", DEL = () => theme().ansi1 ?? "#f85149";
 const READ = ["--literal-pathspecs", "--no-optional-locks", "-c", "core.fsmonitor=false"];
-const ROW = 20, DEL = "#f85149", ADD = "#3fb950", ICON = "mods/source-control/";
+const ROW = 20, ICON = "mods/source-control/";
 // A virtual list needs one row height: every row, file headers too, is ROW tall.
 // Working-tree target without a path: every tracked change (HEAD ↔ working tree).
 
@@ -90,7 +91,7 @@ export default class GitDiff extends View {
     return div().w(44).flex_none().pr(8).text_right().text_color(kind && kind !== " " ? t.foreground : t.dim).child(n == null ? "" : String(n));
   }
 
-  bg(kind) { return kind === "-" ? DEL + "30" : kind === "+" ? ADD + "30" : null; }
+  bg(kind) { return kind === "-" ? DEL() + "30" : kind === "+" ? ADD() + "30" : null; }
 
   side(s, t, left) {
     const bg = !s ? null : this.bg(s.kind);
@@ -98,7 +99,7 @@ export default class GitDiff extends View {
       .when(left, (e) => e.border_r(1).border_color(t.border))
       .child(this.num(s?.n, t, s?.kind))
       // ponytail: long lines truncate; add horizontal scroll if needed.
-      .child(div().flex_1().min_w(0).truncate().whitespace_nowrap().text_color(s?.kind === "-" ? DEL : s?.kind === "+" ? ADD : t.foreground).child(s ? s.text || " " : ""));
+      .child(div().flex_1().min_w(0).truncate().whitespace_nowrap().text_color(s?.kind === "-" ? DEL() : s?.kind === "+" ? ADD() : t.foreground).child(s ? s.text || " " : ""));
   }
 
   row(r, t, mode) {
@@ -109,12 +110,12 @@ export default class GitDiff extends View {
     const bg = this.bg(r.kind);
     return h_flex().w_full().h(ROW).flex_none().items_center().when(Boolean(bg), (e) => e.bg(bg))
       .child(this.num(r.o, t, r.kind)).child(this.num(r.n, t, r.kind))
-      .child(div().w(14).flex_none().text_color(r.kind === "-" ? DEL : ADD).child(r.kind === " " ? "" : r.kind))
-      .child(div().flex_1().min_w(0).truncate().whitespace_nowrap().text_color(r.kind === "-" ? DEL : r.kind === "+" ? ADD : t.foreground).child(r.text || " "));
+      .child(div().w(14).flex_none().text_color(r.kind === "-" ? DEL() : ADD()).child(r.kind === " " ? "" : r.kind))
+      .child(div().flex_1().min_w(0).truncate().whitespace_nowrap().text_color(r.kind === "-" ? DEL() : r.kind === "+" ? ADD() : t.foreground).child(r.text || " "));
   }
 
   toggle(id, icon, on, onClick, t) {
-    return div().id(id).w(24).h(22).flex().items_center().justify_center().rounded(5).cursor_pointer()
+    return div().id(id).w(24).h(22).flex().items_center().justify_center().rounded(6).cursor_pointer()
       .text_color(on ? t.foreground : t.muted).when(on, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => onClick(cx)).child(svg(ICON + icon).size(14));
   }
@@ -131,7 +132,7 @@ export default class GitDiff extends View {
         .child(h_flex().gap(8).items_center()
           .child(svg(ICON + (worktree ? "file.svg" : "commit.svg")).size(14).text_color(t.muted))
           .child(div().flex_1().min_w(0).truncate().font_semibold().text_size(13).child(title ?? ""))
-          .child(div().text_color(ADD).child(`+${add}`)).child(div().text_color(DEL).child(`−${del}`))
+          .child(div().text_color(ADD()).child(`+${add}`)).child(div().text_color(DEL()).child(`−${del}`))
           .child(h_flex().gap(2).p(2).rounded(6).border_1().border_color(t.border)
             .child(this.toggle("gd-unified", "unified.svg", mode === "unified", () => setShared("git-diff.mode", "unified"), t))
             .child(this.toggle("gd-split", "split.svg", mode === "split", () => setShared("git-diff.mode", "split"), t)))

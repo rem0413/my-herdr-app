@@ -177,20 +177,20 @@ export default class ModManager extends View {
     for (const m of this.mods) counts[m.source] = (counts[m.source] ?? 0) + 1;
     const index = this.usageIndex();
     const shown = this.mods.filter(m => this.filter === "all" || m.source === this.filter);
-    return v_flex().id("mod-manager").size_full().bg(t.popover).text_size(12.5).text_color(t.foreground)
+    return v_flex().id("mod-manager").size_full().bg(t.popover).text_size(12).text_color(t.foreground)
       .child(h_flex().px(14).py(10).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().flex_1().font_semibold().text_size(13.5).child("Mod Manager"))
+        .child(div().flex_1().font_semibold().text_size(13).child("Mod Manager"))
         .child(this.icon(t, "reload", "mods/mod-manager/refresh.svg", "Reload the mod list", Boolean(this.busy), (_e, cx) => this.load(cx)))
         .child(this.icon(t, "close", "mods/workspace-chrome/x.svg", "Close", false, () => closeOverlay(props()?.overlay))))
       .child(h_flex().px(14).py(8).gap(6)
         .children(["all", "repo", "local", "herdr"].map(f =>
-          div().id(`f-${f}`).px(10).py(3).rounded(10).text_size(11.5)
+          div().id(`f-${f}`).px(10).py(3).rounded(10).text_size(11)
             .bg(this.filter === f ? t.selected : t.surface).text_color(this.filter === f ? t.foreground : t.muted)
             .hover(s => s.bg(t.hover)).on_click((_e, cx) => { this.filter = f; cx.notify(); })
             .child(`${f[0].toUpperCase()}${f.slice(1)} ${counts[f] ?? 0}`))))
       .child(v_flex().id("mm-list").flex_1().min_h(0).overflow_y_scrollbar().px(14).pb(8).gap(6)
         .children(shown.map(m => this.row(t, m, cx, index.get(m.name)))))
-      .child(div().px(14).py(8).border_t(1).border_color(t.border).text_size(11.5).text_color(t.dim)
+      .child(div().px(14).py(8).border_t(1).border_color(t.border).text_size(11).text_color(t.dim)
         .child(this.message ?? (this.scanReady ? "Info shows usage. Only unreferenced non-Herdr mods can be deleted." : "Scanning usage…")));
   }
 
@@ -211,12 +211,12 @@ export default class ModManager extends View {
     const color = info.unused ? t.blocked : running ? t.done : t.muted;
     const summary = [owners.length ? `Layouts: ${owners.join(", ")}` : "", info.shortcuts.length ? "Keyboard shortcut" : "", info.tabs.length ? "Open tab" : "", info.callers.length ? `Referenced by: ${info.callers.join(", ")}` : ""].filter(Boolean).join(" · ");
     return h_flex().id(`m-${m.name}`).px(10).py(8).gap(10).items_center().rounded(6).bg(t.surface).border_1().border_color(t.border)
-      .child(div().w(42).flex_none().px(5).rounded(4).border_1().border_color(tag).text_size(10.5).text_color(tag).child(m.source))
+      .child(div().w(42).flex_none().px(5).rounded(4).border_1().border_color(tag).text_size(10).text_color(tag).child(m.source))
       .child(v_flex().flex_1().min_w(0).gap(3)
         .child(h_flex().gap(6).items_center()
           .child(div().font_semibold().truncate().text_color(isOff ? t.dim : t.foreground).child(m.name))
-          .when(m.changed, el => el.child(div().text_size(10.5).text_color(t.blocked).child("edited")))
-          .when(isOff, el => el.child(div().text_size(10.5).text_color(t.dim).child("off"))))
+          .when(m.changed, el => el.child(div().text_size(10).text_color(t.blocked).child("edited")))
+          .when(isOff, el => el.child(div().text_size(10).text_color(t.dim).child("off"))))
         .child(h_flex().gap(5).items_center()
           .child(svg(`mods/mod-manager/${info.unused ? "unused" : running ? "running" : "linked"}.svg`).size(12).text_color(color).tooltip(summary || label))
           .child(div().text_size(11).text_color(color).child(label))))
@@ -232,28 +232,28 @@ export default class ModManager extends View {
         ? this.icon(t, `u-${m.name}`, "mods/mod-manager/update.svg", `Update to ${upd.split("-> ")[1].slice(0, 7)}`, Boolean(this.busy), (_e, cx) => this.update(m.name, cx), this.busy === m.name, true)
         : this.icon(t, `c-${m.name}`, "mods/mod-manager/check.svg", "Check for update", Boolean(this.busy), (_e, cx) => this.check(m.name, cx), this.busy === `check:${m.name}`)))
       .child(can ? this.switch(t, `s-${m.name}`, !isOff, () => this.toggle(m))
-        : div().w(34).text_size(10.5).text_color(t.dim).child("—"));
+        : div().w(34).text_size(10).text_color(t.dim).child("—"));
   }
   details(t) {
     const p = props(), info = p.info;
     const tag = { repo: t.accent, herdr: t.dim, local: t.muted }[p.source];
     const status = info.unused ? t.blocked : p.label === "Running" ? t.done : t.muted;
     const chip = text => div().px(7).py(2).rounded(4).bg(t.raised).text_size(11).text_color(t.foreground).child(text);
-    const pill = (text, color) => div().px(7).py(1).rounded(4).border_1().border_color(color).text_size(10.5).text_color(color).child(text);
+    const pill = (text, color) => div().px(7).py(1).rounded(4).border_1().border_color(color).text_size(10).text_color(color).child(text);
     const repo = p.repo?.repo?.replace(/^https?:\/\/github\.com\//, "");
     const section = (icon, title, items) => h_flex().gap(10).items_start().px(12).py(10).rounded(6).bg(t.surface).border_1().border_color(t.border)
-      .child(div().flex_none().p(5).rounded(5).bg(t.raised).text_color(t.muted).child(svg(`mods/mod-manager/${icon}.svg`).size(14)))
+      .child(div().flex_none().p(5).rounded(6).bg(t.raised).text_color(t.muted).child(svg(`mods/mod-manager/${icon}.svg`).size(14)))
       .child(v_flex().flex_1().min_w(0).gap(5)
         .child(div().text_size(11).text_color(t.dim).child(title))
-        .child(items.length ? h_flex().flex_wrap().gap(4).children(items.map(chip)) : div().text_size(11.5).text_color(t.dim).child("None")));
+        .child(items.length ? h_flex().flex_wrap().gap(4).children(items.map(chip)) : div().text_size(11).text_color(t.dim).child("None")));
     const locked = p.source === "herdr" || !info.unused;
     const note = p.source === "herdr" ? "Herdr may invoke this internally. Deletion locked."
       : info.unused ? "No usage found. Dynamic or external callers may be missed." : "Referenced mod. Deletion locked.";
     return v_flex().size_full().bg(t.popover).text_color(t.foreground).text_size(12)
       .child(h_flex().px(14).py(12).gap(10).items_center().border_b(1).border_color(t.border)
-        .child(div().flex_none().p(7).rounded(7).bg(t.raised).text_color(tag).child(svg("mods/mod-manager/puzzle.svg").size(18)))
+        .child(div().flex_none().p(7).rounded(8).bg(t.raised).text_color(tag).child(svg("mods/mod-manager/puzzle.svg").size(18)))
         .child(v_flex().flex_1().min_w(0).gap(4)
-          .child(div().font_semibold().text_size(14).truncate().child(p.name))
+          .child(div().font_semibold().text_size(13).truncate().child(p.name))
           .child(h_flex().gap(5).items_center()
             .child(pill(p.source, tag))
             .child(pill(p.label, status))
@@ -266,7 +266,7 @@ export default class ModManager extends View {
         .child(section("keyboard", "Shortcuts", info.shortcuts))
         .child(section("tab", "Open tabs", info.tabs))
         .child(section("linked", "Referenced by mods", info.callers)))
-      .child(h_flex().px(14).py(10).gap(8).items_center().border_t(1).border_color(t.border).text_size(11.5)
+      .child(h_flex().px(14).py(10).gap(8).items_center().border_t(1).border_color(t.border).text_size(11)
         .text_color(locked ? t.muted : t.blocked)
         .child(svg(`mods/mod-manager/${locked ? "lock" : "unused"}.svg`).size(13))
         .child(div().flex_1().child(note)));
@@ -277,7 +277,7 @@ export default class ModManager extends View {
     const m = this.mods.find(m => m.name === name);
     const allowed = canDelete(m, this.usageIndex().get(name), this.scanReady);
     return v_flex().size_full().p(16).gap(12).bg(t.popover).text_color(t.foreground).text_size(12)
-      .child(div().font_semibold().text_size(14).child(`Delete ${name}?`))
+      .child(div().font_semibold().text_size(13).child(`Delete ${name}?`))
       .child(div().flex_1().child(this.message ?? "Permanently removes this mod folder. Saved mod data is kept. Dynamic callers may be missed."))
       .child(h_flex().gap(10).justify_end()
         .child(div().id("cancel-delete").px(10).py(6).on_click(() => closeOverlay(props().overlay)).child("Cancel"))
@@ -320,7 +320,7 @@ export default class ModManager extends View {
 
   // An icon button with a tooltip; `spin` while its work runs, `primary` for the row's Update.
   icon(t, id, path, tip, disabled, onClick, spin = false, primary = false) {
-    return div().id(id).flex_none().p(5).rounded(5).tooltip(tip)
+    return div().id(id).flex_none().p(5).rounded(6).tooltip(tip)
       .bg(primary ? t.solid : t.popover).text_color(primary ? t.solid_foreground : t.muted)
       .when(disabled && !spin, el => el.opacity(0.5))
       .when(!disabled, el => el.hover(s => s.bg(primary ? t.solid : t.hover).text_color(primary ? t.solid_foreground : t.foreground)).on_click(onClick))
@@ -328,8 +328,8 @@ export default class ModManager extends View {
   }
 
   switch(t, id, on, onClick) {
-    return div().id(id).flex_none().w(34).h(18).rounded(9).p(2).bg(on ? t.accent : t.input).on_click(onClick)
+    return div().id(id).flex_none().w(34).h(18).rounded(10).p(2).bg(on ? t.accent : t.input).on_click(onClick)
       .child(h_flex().size_full().when(on, el => el.justify_end())
-        .child(div().size(14).rounded(7).bg(on ? t.accent_foreground : t.muted)));
+        .child(div().size(14).rounded(8).bg(on ? t.accent_foreground : t.muted)));
   }
 }

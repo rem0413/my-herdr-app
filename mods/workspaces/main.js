@@ -92,7 +92,7 @@ export function listTabs(t, on, agentKeys = new Set()) {
     .when(on !== id, (el) => el.hover((s) => s.bg(t.hover).text_color(t.foreground)))
     .on_click(() => run("layout.select", { stack: "sidebar-lists", child: id }))
     .child(label)
-    .when(n > 0, (el) => el.child(div().px(5).h(16).rounded(4).bg(t.raised).text_size(10.5).text_color(t.muted).flex().items_center().child(String(n))));
+    .when(n > 0, (el) => el.child(div().px(5).h(16).rounded(4).bg(t.raised).text_size(10).text_color(t.muted).flex().items_center().child(String(n))));
   return h_flex().gap(2).child(tab("spaces", "Spaces", 0)).child(tab("agents", "Agents", count));
 }
 
@@ -394,7 +394,7 @@ export default class Spaces extends View {
       return v_flex().id("workspace-tag").w_full().min_h(0).p(8).gap(6).bg(t.popover).text_size(12)
         .on_key_down((e) => { if (e.key === "escape") closeOverlay(props().overlay); })
         .child(h_flex().gap(7).items_center().text_color(t.dim).child(colorDot(t, this.tagKey)).child("Tag name · Enter saves"))
-        .child(Input.new(this.tagInput).h(30).px(8).rounded(7).border_1().border_color(t.accent).bg(t.background).text_size(12.8).text_color(t.foreground));
+        .child(Input.new(this.tagInput).h(30).px(8).rounded(8).border_1().border_color(t.accent).bg(t.background).text_size(13).text_color(t.foreground));
     }
     const list = this.menuItems();
     const pick = (i, cx) => {
@@ -408,7 +408,7 @@ export default class Spaces extends View {
       .min_h(0)
       .p(5)
       .bg(t.popover)
-      .text_size(12.8)
+      .text_size(13)
       .on_key_down((e, cx) => {
         const n = list.length || 1;
         if (e.key === "down") this.at = (this.at + 1) % n;
@@ -427,7 +427,7 @@ export default class Spaces extends View {
               .flex_none()
               .px(8)
               .gap(9)
-              .rounded(7)
+              .rounded(8)
               .items_center()
               .text_color(t.foreground)
               .when(i === this.at, (el) => el.bg(t.selected))
@@ -534,9 +534,9 @@ export default class Spaces extends View {
               .child(repair?.busy ? "Connecting…" : "Connect"))))
           .when(connected, el => el.child(div().id(`machine-add-${m ?? "local"}`).flex_none().px(4).rounded(4).hover(s => s.bg(t.hover).text_color(t.foreground))
             .on_click((_e, cx) => { cx.stop_propagation(); addSpace(m); }).child("+")))
-          .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
+          .child(div().size(6).rounded(4).flex_none().bg(connected ? t.ansi2 : t.dim))
           .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
-      const empty = h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(8).gap(7).items_center().rounded(7)
+      const empty = h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(8).gap(7).items_center().rounded(8)
         .text_size(12).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
         .on_click(() => addSpace(m))
         .child(svg("mods/workspace-chrome/plus.svg").size(12)).when(!collapsed, el => el.child("New space there"));
@@ -562,7 +562,7 @@ export default class Spaces extends View {
       .gap(5)
       .justify_start()
       .items_center()
-      .text_size(11.5)
+      .text_size(11)
       .text_color(t.dim)
       .when(Boolean(where), (el) => el.child(div().min_w(0).truncate().child(where)))
       .when(g.ahead > 0, (el) => el.child(div().flex_none().text_color(t.ansi2).child(`\u2191${g.ahead}`)))
@@ -594,13 +594,13 @@ export default class Spaces extends View {
         .pr(8)
         .gap(7)
         .items_center()
-        .rounded(7)
+        .rounded(8)
         .when(lit, (el) => el.bg(t.raised))
         .when(!lit, (el) => el.hover((s) => s.bg(t.hover)))
         .on_click(() => { run("space.select", { id: w.id }); run("tab.select", { id: tab.id }); })
         .child(rail(t, i === tabs.length - 1))
         .child(progIcon(lead?.program, 14, t.dim))
-        .child(div().flex_shrink(0).max_w(130).truncate().text_size(12.5).text_color(lit ? t.foreground : t.muted).child(tab.name))
+        .child(div().flex_shrink(0).max_w(130).truncate().text_size(12).text_color(lit ? t.foreground : t.muted).child(tab.name))
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(detail && detail !== tab.name ? detail : ""))
         .when(Boolean(status), (el) => el.child(statusMark(t, status)));
     });
@@ -621,7 +621,7 @@ export default class Spaces extends View {
       .flex_none()
       .gap(3)
       .items_center()
-      .text_size(11.5)
+      .text_size(11)
       .text_color(look.color)
       .tooltip(`${pr.repository}#${pr.number} · ${look.label}${entry.error ? " (may be stale)" : ""}\n${pr.title}\n${window().platform === "macos" ? "Cmd" : "Ctrl"}-click to open`)
       .on_mouse_down("left", (e, cx) => { if (link(e)) cx.stop_propagation(); })
@@ -819,15 +819,15 @@ export default class Spaces extends View {
     const used = new Set((shared("workspace.tree") ?? EMPTY).entries.filter((e) => !e.parent).map(colorOf));
     if (this.tagFilter && !used.has(this.tagFilter)) this.tagFilter = null;
     const folded = localStorage.getItem("tags.folded") === "1";
-    const item = (id, on, icon, label, pick) => h_flex().id(id).h(28).flex_none().px(8).gap(10).items_center().rounded(7)
+    const item = (id, on, icon, label, pick) => h_flex().id(id).h(28).flex_none().px(8).gap(10).items_center().rounded(8)
       .text_size(13).text_color(t.foreground).when(on, el => el.bg(t.selected)).when(!on, el => el.hover(s => s.bg(t.hover)))
       .on_click((_e, cx) => { this.tagFilter = pick; cx.notify(); })
       .child(icon).child(div().flex_1().min_w(0).truncate().child(label));
     const all = h_flex().size(14).flex_none().items_center()
-      .child(div().size(10).rounded(5).border_1().border_color(t.muted))
-      .child(div().size(10).rounded(5).border_1().border_color(t.muted).ml(-6));
+      .child(div().size(10).rounded(6).border_1().border_color(t.muted))
+      .child(div().size(10).rounded(6).border_1().border_color(t.muted).ml(-6));
     return v_flex().flex_none().px(8).pb(6)
-      .child(h_flex().id("tags-head").h(26).px(8).items_center().justify_between().text_size(11.5).text_color(t.dim).cursor_pointer()
+      .child(h_flex().id("tags-head").h(26).px(8).items_center().justify_between().text_size(11).text_color(t.dim).cursor_pointer()
         .on_click((_e, cx) => { localStorage.setItem("tags.folded", folded ? "0" : "1"); cx.notify(); })
         .child("Tags").child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11)))
       .when(!folded, el => el
@@ -855,7 +855,7 @@ export default class Spaces extends View {
     }
     if (changed) setShared("space.colors", kept);
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
-      .child(h_flex().h(36).pl(8).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim).border_b_1().border_color(t.border)
+      .child(h_flex().h(36).pl(8).pr(10).items_center().justify_between().text_size(11).text_color(t.dim).border_b_1().border_color(t.border)
         .when(!collapsed, el => el.child(listTabs(t, "spaces", this.agentKeys)))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => addSpace()).child(svg("mods/workspace-chrome/plus.svg").size(14))))

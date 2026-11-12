@@ -78,7 +78,7 @@ export default class Pane extends View {
     // file-editor panes: the file's name and folder (shared by file-editor), its git letter and unsaved dot.
     const file = p.mod === "file-editor" ? Object.entries(shared("editor.tabs") ?? {}).find(([, id]) => id === p.tab)?.[0].split("|").slice(1).join("|") : null;
     const edit = file ? (shared("editor.state") ?? {})[p.tab] : null;
-    const gitColor = edit?.git === "U" || edit?.git === "A" ? "#73c991" : edit?.git === "D" || edit?.git === "!" ? "#e06c75" : "#e5a54b";
+    const gitColor = edit?.git === "U" || edit?.git === "A" ? t.ansi2 : edit?.git === "D" || edit?.git === "!" ? t.ansi1 : t.ansi3;
     const name = file ? file.split("/").pop() : ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
     const pic = file ? (edit?.icon?.tint === false ? image(edit.icon.path).w(14).h(14).flex_none() : svg(edit?.icon?.path ?? "mods/my-files/icons/file.svg").size(14).flex_none().text_color(edit?.icon?.color ?? t.dim)) : icon(p.program, 14, t.dim);
     const st = p.status;
@@ -104,7 +104,7 @@ export default class Pane extends View {
       .when(Boolean(edit?.dirty), el => el.child(div().size(7).flex_none().rounded(4).bg(t.foreground)))
       .when(this.busy > 0, el => el.child(div().flex_none().text_color(t.accent).child(`Uploading ${this.busy}…`)))
       .when(st === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
-      .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")))
+      .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(6).bg(t.blocked + "26").text_size(10).font_semibold().text_color(t.blocked).child("Needs you")))
       .when(st === "done", el => el.child(div().size(7).flex_none().rounded(4).bg(t.done)))
       .when(this.hovered, el => el
         .child(this.button(t, `ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }))

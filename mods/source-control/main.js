@@ -22,7 +22,8 @@ function location() {
 const key = () => JSON.stringify(location());
 // Reads write nothing under .git, so the folder watch doesn't wake itself.
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
-const ICON = "mods/source-control/", SEP = "\x1f", ROW = 26, LIMIT = 2000, ADD = "#3fb950", DEL = "#f85149";
+const ICON = "mods/source-control/", SEP = "\x1f", ROW = 26, LIMIT = 2000;
+const ADD = () => theme().ansi2 ?? "#3fb950", DEL = () => theme().ansi1 ?? "#f85149";
 const base = (p) => p.replace(/\/+$/, "").split("/").pop() || p;
 
 export default class SourceControl extends View {
@@ -221,10 +222,10 @@ export default class SourceControl extends View {
       .when(Boolean(label) && !compact, (e) => e.child(div().text_size(12).child(label)));
   }
 
-  segment(t, ...buttons) { return h_flex().flex_none().gap(1).p(1).rounded(7).border_1().border_color(t.border).children(buttons); }
+  segment(t, ...buttons) { return h_flex().flex_none().gap(1).p(1).rounded(8).border_1().border_color(t.border).children(buttons); }
 
   check(id, state, files, t) {
-    return div().id(id).w(14).h(14).flex_none().flex().items_center().justify_center().rounded(3).border_1()
+    return div().id(id).w(14).h(14).flex_none().flex().items_center().justify_center().rounded(4).border_1()
       .border_color(state === "none" ? t.input : t.accent).text_color(t.accent)
       .when(state === "all", (e) => e.bg(t.accent).text_color(t.accent_foreground))
       .when(!this.busy, (e) => e.cursor_pointer())
@@ -244,7 +245,7 @@ export default class SourceControl extends View {
       .when(Boolean(top), (e) => e.child(top))
       .children(items.map((it, k) => it.header
         ? div().px(8).pt(6).pb(2).text_size(10).text_color(t.dim).child(it.header)
-        : h_flex().id(`${id}-${k}`).h(26).flex_none().px(6).gap(6).items_center().rounded(5).cursor_pointer().hover((s) => s.bg(t.hover))
+        : h_flex().id(`${id}-${k}`).h(26).flex_none().px(6).gap(6).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { this.menu = null; it.pick(cx); cx.notify(); })
           .child(div().w(14).flex_none().text_color(t.accent).when(Boolean(it.checked), (e) => e.child(this.icon("check", 12))).when(Boolean(it.icon) && !it.checked, (e) => e.text_color(t.muted).child(this.icon(it.icon, 12))))
           .child(div().flex_1().min_w(0).truncate().text_color(it.dim ? t.muted : t.foreground).child(it.label))
@@ -300,7 +301,7 @@ export default class SourceControl extends View {
     ];
     return h_flex().flex_none().h(38).px(8).gap(4).items_center().border_b(1).border_color(t.border)
       .child(this.button("sc-viewdiff", "diff", "View Diff", () => this.openDiff({ worktree: true }, "Changes"), t, { disabled: !this.files.length }))
-      .child(div().flex_none().text_size(12).text_color(ADD).child(`+${add}`)).child(div().flex_none().text_size(12).text_color(DEL).child(`−${del}`))
+      .child(div().flex_none().text_size(12).text_color(ADD()).child(`+${add}`)).child(div().flex_none().text_size(12).text_color(DEL()).child(`−${del}`))
       .child(div().flex_1())
       .child(this.segment(t,
         this.button("sc-tree", "tree", null, (cx) => { this.view = "tree"; localStorage.setItem("view", "tree"); cx.notify(); }, t, { active: this.view === "tree" }),
@@ -325,7 +326,7 @@ export default class SourceControl extends View {
     if (this.collapsed.has(group)) return [];
     const tree = this.view === "tree";
     const rows = tree ? treeRows(files, this.collapsed, group) : files.map((f) => ({ file: f, key: `${group}:${f.path}`, name: base(f.path), depth: 0 }));
-    const letterColor = (f) => f.letter === "D" || f.letter === "!" ? DEL : f.letter === "M" ? t.ansi3 : ADD;
+    const letterColor = (f) => f.letter === "D" || f.letter === "!" ? DEL() : f.letter === "M" ? t.ansi3 : ADD();
     return rows.map((r) => {
       const row = h_flex().id(`sc-r-${r.key}`).h(ROW).flex_none().pl(28 + r.depth * 16).pr(8).gap(7).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover));
       if (r.dir) return row.on_click((_e, cx) => { this.collapsed.has(r.key) ? this.collapsed.delete(r.key) : this.collapsed.add(r.key); cx.notify(); })
@@ -343,8 +344,8 @@ export default class SourceControl extends View {
           .child(div().flex_none().max_w(260).truncate().when(f.letter === "D", (e) => e.line_through()).child(r.name))
           .when(!tree && Boolean(dir), (e) => e.child(div().min_w(0).ml(6).truncate().text_size(11).text_color(t.dim).child(dir))))
         .when(f.binary, (e) => e.child(div().text_size(11).text_color(t.dim).child("bin")))
-        .when(f.add > 0, (e) => e.child(div().text_size(11).text_color(ADD).child(`+${f.add}`)))
-        .when(f.del > 0, (e) => e.child(div().text_size(11).text_color(DEL).child(`−${f.del}`)));
+        .when(f.add > 0, (e) => e.child(div().text_size(11).text_color(ADD()).child(`+${f.add}`)))
+        .when(f.del > 0, (e) => e.child(div().text_size(11).text_color(DEL()).child(`−${f.del}`)));
     });
   }
 
@@ -388,7 +389,7 @@ export default class SourceControl extends View {
       { label: "Commit & Push", icon: "push", pick: (cx) => this.commit("push", cx) },
       { label: "Amend last commit", icon: "undo", pick: (cx) => this.commit("amend", cx) },
     ];
-    const trigger = (id, text, bold) => h_flex().id(id).min_w(0).h(24).px(4).gap(3).items_center().rounded(5).cursor_pointer().hover((s) => s.bg(t.hover))
+    const trigger = (id, text, bold) => h_flex().id(id).min_w(0).h(24).px(4).gap(3).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
       .child(div().min_w(0).truncate().when(bold, (e) => e.font_semibold().text_color(t.foreground)).child(text)).child(this.icon("chevron-down", 11));
     const branchFind = div().id("sc-branch-find").mx(4).mb(4).h(28).px(8).flex().items_center().rounded(6).border_1().border_color(t.input)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).child(Input.new(this.filter).h_full().text_size(12).text_color(t.foreground));
@@ -407,7 +408,7 @@ export default class SourceControl extends View {
             if (e.key === "enter" && (e.modifiers.platform || e.modifiers.control)) { this.commit("commit", cx); cx.stop_propagation(); }
           })
           .child(Textarea.new(this.msg).w_full().text_size(12).text_color(t.foreground).font_family(settings().font_family ?? "JetBrains Mono")))
-        .when(Boolean(this.note || this.busy), (e) => e.child(div().text_size(11).text_color(this.note ? DEL : t.muted).whitespace_normal().child(this.note || `${this.busy}…`)))
+        .when(Boolean(this.note || this.busy), (e) => e.child(div().text_size(11).text_color(this.note ? DEL() : t.muted).whitespace_normal().child(this.note || `${this.busy}…`)))
         .child(h_flex().items_center().gap(8)
           .child(div().flex_1().text_size(11).text_color(t.dim).truncate().child(this.files.length ? (staged ? "Commits staged files · ⌘↵" : "Nothing staged: commits all · ⌘↵") : ""))
           .child(this.splitButton("sc-commit", staged ? "Commit" : "Commit All", canCommit, (cx) => this.commit("commit", cx), commitItems, t, true))))
