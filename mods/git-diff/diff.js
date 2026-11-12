@@ -36,13 +36,20 @@ export function unifiedRows(patch) {
   return rows;
 }
 
-// Added / removed line counts of a patch.
+// Added / removed line counts of a patch (of one or many files: each file's ---/+++ header is not a change).
 export function countPatch(patch) {
   let add = 0, del = 0, hunks = 0;
   for (const raw of patch.split("\n")) {
-    if (raw.startsWith("@@")) hunks++;
+    if (raw.startsWith("diff --git ")) hunks = 0;
+    else if (raw.startsWith("@@")) hunks++;
     else if (hunks && raw[0] === "+") add++;
     else if (hunks && raw[0] === "-") del++;
   }
   return { add, del };
+}
+
+// The file a one-file chunk of a patch is about. Git ends a ---/+++ name containing a space with a tab.
+export function patchFileName(chunk) {
+  const name = /^\+\+\+ b\/(.+)$/m.exec(chunk)?.[1] ?? /^--- a\/(.+)$/m.exec(chunk)?.[1] ?? /^diff --git a\/.+ b\/(.+)$/m.exec(chunk)?.[1] ?? "";
+  return name.replace(/\t$/, "");
 }

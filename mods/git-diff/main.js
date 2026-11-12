@@ -1,7 +1,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { exec, theme, settings, shared, setShared, panes, run, window } from "herdr";
-import { pairRows, unifiedRows, countPatch } from "./diff.js";
+import { pairRows, unifiedRows, countPatch, patchFileName } from "./diff.js";
 
 // The diff preview tab. source-control opens one tab of this and reuses it; it shows
 // shared("git-diff.preview"):
@@ -9,7 +9,8 @@ import { pairRows, unifiedRows, countPatch } from "./diff.js";
 //   { repo, on, path, worktree: true, untracked? }       HEAD ↔ working tree of one file
 // shared("git-diff.mode") is "split" (default) or "unified"; source-control toggles it too.
 const ADD = () => theme().ansi2 ?? "#3fb950", DEL = () => theme().ansi1 ?? "#f85149";
-const READ = ["--literal-pathspecs", "--no-optional-locks", "-c", "core.fsmonitor=false"];
+// core.quotePath=false: non-ASCII names come out as written, not as quoted octal escapes.
+const READ = ["--literal-pathspecs", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false"];
 const ROW = 20, ICON = "mods/source-control/";
 // A virtual list needs one row height: every row, file headers too, is ROW tall.
 // Working-tree target without a path: every tracked change (HEAD ↔ working tree).
@@ -24,8 +25,7 @@ function build(patch, unified) {
   const rows = [];
   for (const chunk of patch.split(/^(?=diff --git )/m)) {
     if (!chunk.trim()) continue;
-    const name = /^\+\+\+ b\/(.+)$/m.exec(chunk)?.[1] ?? /^--- a\/(.+)$/m.exec(chunk)?.[1] ?? /^diff --git a\/.+ b\/(.+)$/m.exec(chunk)?.[1] ?? "";
-    rows.push({ file: name });
+    rows.push({ file: patchFileName(chunk) });
     if (/^Binary files /m.test(chunk)) { rows.push({ note: "Binary file · no text diff" }); continue; }
     const body = unified ? unifiedRows(chunk) : pairRows(chunk);
     rows.push(...(body.length ? body : [{ note: "No text changes" }]));
@@ -35,7 +35,7 @@ function build(patch, unified) {
 
 export default class GitDiff extends View {
   init(_props, cx) {
-    this.rows = []; this.error = null; this.patch = "";
+    this.rows = []; this.error = null; this.patch = ""; this.seq = 0; this.inflight = false;
     // Tell openers which tab this is so later clicks reuse it. Mod panes don't get their own pane id,
     // so just after opening (tab.new focuses it) take the focused git-diff pane's tab.
     cx.timer.after(150, () => {
@@ -53,7 +53,10 @@ export default class GitDiff extends View {
     const { repo, on, hash, path, worktree, untracked } = target ?? {};
     const want = JSON.stringify(target ?? null);
     if (want !== this.loaded) { this.loaded = want; this.rows = []; this.patch = ""; this.error = null; }
+    else if (this.inflight) return; // a reload of the same target is already running
     if (!repo || (!hash && !worktree)) { this.error = "Open a file from Source Control or Git Graph"; return; }
+    const seq = ++this.seq;
+    this.inflight = true;
     cx.spawn(async (cx) => {
       let patch = "", error = null;
       try {
@@ -71,6 +74,8 @@ export default class GitDiff extends View {
         // ponytail: a patch past exec's 8 MiB cap fails as a whole; add per-file paging if that hurts.
         else patch = r.stdout;
       } catch (e) { error = String(e); }
+      if (seq !== this.seq) return; // a newer load owns the result
+      this.inflight = false;
       if (want !== this.loaded) return; // another file was picked meanwhile
       if (patch === this.patch && error === this.error) return;
       this.patch = patch; this.error = error; this.built = null;
