@@ -73,8 +73,9 @@ function statusMark(t, s) {
 // One step of a tree line in front of a tab row: down from the row above, then right.
 function rail(t, last) {
   return div().relative().w(10).h(26).flex_none()
-    .child(div().absolute().left(0).top(0).w(1.5).bg(t.input).when(last, (el) => el.h(13)).when(!last, (el) => el.bottom(0)))
-    .child(div().absolute().left(0).top(12).w(9).h(1.5).bg(t.input));
+    .when(!last, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(1.5).bg(t.input)))
+    // A rounded elbow into the row, as the agents list draws its sub-agents.
+    .child(div().absolute().left(0).top(0).w(9).h(13.5).border_l(1.5).border_b(1.5).border_color(t.input).rounded_bl(6));
 }
 
 // Live sub-agents of `addr`, depth first, each with its tree lines: terminals started with a
@@ -652,8 +653,7 @@ export default class Spaces extends View {
         .when(!lastTab, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(1.5).bg(t.input))))
       .children(lines.map((l) => div().relative().w(12).h(24).flex_none()
         .when(l === "│" || l === "├", (el) => el.child(div().absolute().left(4).top(0).bottom(0).w(1.5).bg(t.input)))
-        .when(l === "└", (el) => el.child(div().absolute().left(4).top(0).h(12).w(1.5).bg(t.input)))
-        .when(l === "└" || l === "├", (el) => el.child(div().absolute().left(4).top(11).w(7).h(1.5).bg(t.input)))))
+        .when(l === "└" || l === "├", (el) => el.child(div().absolute().left(4).top(0).w(7).h(12.5).border_l(1.5).border_b(1.5).border_color(t.input).rounded_bl(6)))))
       .child(div().ml(2).mr(6).child(progIcon(k.program, 12, t.dim)))
       .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(k.name || k.template || k.program?.name || k.address))
       .when(Boolean(st), (el) => el.child(statusMark(t, st)));
