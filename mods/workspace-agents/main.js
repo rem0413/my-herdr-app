@@ -3,7 +3,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
+import { agents, knownAgents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
 import { OmpChildren } from "./omp.js";
 
 function find(node, id) {
@@ -40,6 +40,26 @@ function title(tab, l) {
   const telling = live && live !== prog && !/^[~/]|^[A-Za-z]:\\/.test(live) && !live.includes("@") && live.toLowerCase() !== l?.program?.key;
   return (tab.name === prog || !tab.named) && telling ? live : tab.name;
 }
+// Panes running a known agent program (Claude Code, Codex, ...) that never reported a
+// status aren't in agents(): an older version, or one started inside tmux. Listed with
+// status "unknown" so they don't silently vanish.
+// Program.agent is only true once a status was reported, so match the known-agents table.
+function unreported(listed, agentKeys) {
+  const tabs = new Map(spaces().flatMap((s) => s.tabs.map((tab, i) => [tab.id, { space: s, tab, index: i + 1 }])));
+  const pinned = new Set(terminals().filter((t) => t.labels?.["herdr.pinned"]).map((t) => t.address));
+  return panes()
+    .filter((p) => p.terminal && agentKeys.has(p.program?.key) && !p.status && !listed.has(p.terminal) && tabs.has(p.tab))
+    .map((p) => {
+      const { space, tab, index } = tabs.get(p.tab);
+      return {
+        address: p.terminal, pane: p.pane, space: space.id, space_name: space.name,
+        tab: tab.id, tab_index: index, tab_name: tab.name,
+        status: "unknown", app: null, program: p.program, title: p.title,
+        seq: 0, pinned: pinned.has(p.terminal), focused: p.focused,
+      };
+    });
+}
+
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
 // A sub-agent without a pane isn't in agents(): its raw word, error counting as
 // blocked. It's never done: it reports to its parent, and the parent's done is the news.
@@ -80,7 +100,7 @@ const SORTS = [
   { id: "grouped", label: "Grouped by space", icon: "layers" },
 ];
 const sortOf = () => SORTS.find((s) => s.id === shared("agents.sort")) ?? SORTS[0];
-const SECTION = { 4: "Needs you", 3: "Done", 2: "Working", 1: "Idle" };
+const SECTION = { 4: "Needs you", 3: "Done", 2: "Working", 1: "Idle", 0: "No status" };
 const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
 
 function duration(ms) {
@@ -121,6 +141,11 @@ export default class Agents extends View {
     this.migratingPins = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
     this.omp = new OmpChildren(cx);
+    // Program keys of known agents, to list panes running one that never reported.
+    this.agentKeys = new Set();
+    cx.spawn(async (cx) => {
+      try { this.agentKeys = new Set((await knownAgents()).map((a) => a.key)); cx.notify(); } catch {}
+    });
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -250,6 +275,7 @@ export default class Agents extends View {
     if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
     // Idle: a ring; done: a dot.
     if (a.status === "idle") return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
+    if (a.status === "unknown") return div().w(13).flex_none().text_size(10.5).font_bold().text_color(t.unknown ?? t.dim).flex().justify_center().child("?");
     return div().size(7).mx(3).flex_none().rounded(4).bg(a.status === "done" ? color : t.dim + "00");
   }
 
@@ -262,6 +288,7 @@ export default class Agents extends View {
     const asleep = shared("hibernate.sleeping") ?? {};
     let list = agents().filter((a) => !asleep[a.space]);
     this.listed = new Map(list.map((a) => [a.address, a.status]));
+    list = [...list, ...unreported(this.listed, this.agentKeys).filter((a) => !asleep[a.space])];
     this.omp.update(list, cx);
     const all = [...terminals(), ...this.omp.nodes];
     this.migratePins(all);
@@ -282,7 +309,7 @@ export default class Agents extends View {
     if (byPriority) {
       // Sorted by rank, so neighbours make a section.
       for (const a of rest) {
-        const r = rankOf(a) || RANK.idle;
+        const r = a.status === "unknown" ? rankOf(a) : rankOf(a) || RANK.idle;
         const id = `sec-${r}`;
         if (groups.at(-1)?.id === id) groups.at(-1).members.push(a), groups.at(-1).under.push(a);
         else groups.push({ id, label: SECTION[r], status: SECTION_STATUS[r], members: [a], under: [a], depth: 0 });

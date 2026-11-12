@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, agents, theme, run, window, keys, shared, setShared } from "herdr";
+import { spaces, agents, knownAgents, panes, theme, run, window, keys, shared, setShared } from "herdr";
 import { scan, SHARED_KEY, RESCAN_KEY } from "./scan.js";
 
 const SCAN_MS = 4000;
@@ -14,6 +14,11 @@ export default class WorkspaceStatus extends View {
     this.scan(cx);
     // Only while the window is in front: nobody reads the count otherwise.
     cx.timer.every(SCAN_MS, (cx) => window()?.active && this.scan(cx));
+    // Program keys of known agents, to count panes running one that never reported.
+    this.agentKeys = new Set();
+    cx.spawn(async (cx) => {
+      try { this.agentKeys = new Set((await knownAgents()).map((a) => a.key)); cx.notify(); } catch {}
+    });
   }
 
   // Publishes only real changes: setShared redraws every mod.
@@ -46,7 +51,13 @@ export default class WorkspaceStatus extends View {
     if (ask !== this.rescan) { this.rescan = ask; this.scan(cx); }
     const t = theme();
     const space = spaces().find(s => s.active);
-    const list = agents();
+    // Matches the agents list: reporting agents plus panes running an agent that never reported.
+    const asleep = shared("hibernate.sleeping") ?? {};
+    const spaceOf = new Map(spaces().flatMap((s) => s.tabs.map((tab) => [tab.id, s.id])));
+    const reported = agents().filter((a) => !asleep[a.space]);
+    const listed = new Set(reported.map((a) => a.address));
+    const silent = panes().filter((p) => p.terminal && this.agentKeys.has(p.program?.key) && !p.status && !listed.has(p.terminal) && spaceOf.has(p.tab) && !asleep[spaceOf.get(p.tab)]);
+    const list = [...reported, ...silent];
     const rows = shared(SHARED_KEY)?.rows;
     const mine = rows?.filter(r => r.space).length;
     const other = rows ? rows.length - mine : 0;

@@ -7,7 +7,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, machines, panes, agents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, agents, knownAgents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 import { EMPTY, canParent, flatten, reconcile, setColor, setParent, startReopen, toggleFold, togglePin } from "./tree.js";
 import { PRStatusObserver, prAppearance } from "./pr-status.js";
 
@@ -82,9 +82,14 @@ function rail(t, last) {
 }
 
 // Spaces | Agents tabs over the sidebar-lists stack; the agents mod draws the same bar.
-export function listTabs(t, on) {
+export function listTabs(t, on, agentKeys = new Set()) {
   const asleep = shared("hibernate.sleeping") ?? {};
-  const count = agents().filter((a) => !asleep[a.space]).length;
+  // Matches the agents list: reporting agents plus panes running an agent that never reported.
+  const spaceOf = new Map(spaces().flatMap((s) => s.tabs.map((tab) => [tab.id, s.id])));
+  const reported = agents().filter((a) => !asleep[a.space]);
+  const listed = new Set(reported.map((a) => a.address));
+  const silent = panes().filter((p) => p.terminal && agentKeys.has(p.program?.key) && !p.status && !listed.has(p.terminal) && spaceOf.has(p.tab) && !asleep[spaceOf.get(p.tab)]);
+  const count = reported.length + silent.length;
   const tab = (id, label, n) => h_flex().id(`lists-tab-${id}`).h(24).px(10).gap(5).items_center().rounded(6).cursor_pointer()
     .text_size(12).font_medium().text_color(on === id ? t.foreground : t.dim)
     .when(on === id, (el) => el.bg(t.selected))
@@ -118,6 +123,11 @@ export default class Spaces extends View {
       this.handle.focus();
       return;
     }
+    // Program keys of known agents, to count panes running one that never reported.
+    this.agentKeys = new Set();
+    cx.spawn(async (cx) => {
+      try { this.agentKeys = new Set((await knownAgents()).map((a) => a.key)); cx.notify(); } catch {}
+    });
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -846,7 +856,7 @@ export default class Spaces extends View {
     if (changed) setShared("space.colors", kept);
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
       .child(h_flex().h(36).pl(8).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim).border_b_1().border_color(t.border)
-        .when(!collapsed, el => el.child(listTabs(t, "spaces")))
+        .when(!collapsed, el => el.child(listTabs(t, "spaces", this.agentKeys)))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => addSpace()).child(svg("mods/workspace-chrome/plus.svg").size(14))))
       .child(v_flex().flex_1().min_h(0).px(8).pb(14).overflow_y_scrollbar().mode("always")
