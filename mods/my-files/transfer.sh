@@ -103,7 +103,7 @@ fetch_remote() {
     [ -e "$1/$2" ] || [ -L "$1/$2" ] || { echo "$1/$2 not found" >&2; exit 1; }
     t=$(mktemp "${TMPDIR:-/tmp}/herdr-xfer.XXXXXX") || exit 1
     echo "$t"
-    tar -cf "$t" -C "$1" "$2" || { rm -f "$t"; exit 1; }
+    tar -cf "$t" -C "$1" ./"$2" || { rm -f "$t"; exit 1; }
     wc -c < "$t" | tr -d " "
     [ -d "$1/$2" ] && echo 1 || echo 0' sh "$parent" "$name" 2>"$L/err")
   rc=$?
@@ -129,7 +129,7 @@ case $mode in
 up)
   [ -e "$src" ] || [ -L "$src" ] || fail "$src not found"
   reserve_remote
-  tar -cf "$L/t.tar" -C "$parent" "$name" 2>"$L/err" || err "tar failed"
+  tar -cf "$L/t.tar" -C "$parent" ./"$name" 2>"$L/err" || err "tar failed"
   total=$(wc -c < "$L/t.tar" | tr -d ' ')
   put
   send_remote

@@ -7,7 +7,7 @@
 // Jobs (upload, download, machine-to-machine copy): shared "files.jobs", started by this mod or file-menu.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, panes, focused, exec, hc, watchFolder, theme, settings, window, run, shared, setShared, readTextFile, appHome, notify, openOverlay } from "herdr";
+import { spaces, panes, focused, exec, hc, home, watchFolder, theme, settings, window, run, shared, setShared, readTextFile, appHome, notify, openOverlay } from "herdr";
 import { iconFor } from "./icons.js";
 import { matchFiles, bytes, parseListing } from "./search.js";
 
@@ -106,7 +106,7 @@ async function startJob(mode, machine, src, dest, label) {
 
 export default class Files extends View {
   init(_props, cx) {
-    this.saved = new Map();
+    this.saved = new Map(); this.watching = new Set(); // roots with a live watch loop
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
     this.icons = new Map(); this.dirSizes = new Map(); // dirSizes: absolute folder path -> bytes or "…"
     this.search = InputState.new({ placeholder: "Search files…" });
@@ -168,13 +168,23 @@ export default class Files extends View {
     });
   }
 
+  // One loop per root: a pending watchFolder cannot be cancelled, so a root shown again reuses its loop,
+  // and a loop whose root is no longer shown ends at its next event. The home folder is never watched
+  // (every app writes under it): the 10 s timer refreshes it.
   watch(root, cx) {
-    if (this.on || this.watched === root) return;
+    if (this.on || this.watched === root || root === home()) return;
     this.watched = root;
-    const context = this.context;
+    if (this.watching.has(root)) return;
+    this.watching.add(root);
     cx.spawn(async cx => {
-      try { while (this.context === context) { await watchFolder(root); if (this.current(context)) { this.index = null; this.refresh(cx); } } }
-      catch { if (this.context === context) this.watched = null; }
+      try {
+        for (;;) {
+          await watchFolder(root);
+          if (this.on || this.root !== root) break;
+          if (this.current(this.context)) { this.index = null; this.refresh(cx); }
+        }
+      } catch { if (!this.on && this.root === root) this.watched = null; }
+      finally { this.watching.delete(root); }
     });
   }
 
@@ -204,11 +214,13 @@ export default class Files extends View {
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on, space }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
       this.pending = new Set(); this.marks = {}; this.watched = null; this.error = null; this.limited = false;
-      this.loading = false; this.index = null;
+      this.loading = false; this.again = false; this.index = null;
     }
     // A change or a new place drops the index; an active search rebuilds it at once.
     this.ensureIndex(cx);
-    if (!cwd || this.loading) return;
+    if (!cwd) return;
+    // A change while loading may be missed by the listing in flight: load once more when it ends.
+    if (this.loading) { this.again = true; return; }
     const context = this.context;
     this.loading = true;
     this.limited = false;
@@ -236,7 +248,13 @@ export default class Files extends View {
         if (!this.current(context)) return;
         this.marks = marks; this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
-      finally { if (this.context === context) this.loading = false; cx.notify(); }
+      finally {
+        if (this.context === context) {
+          this.loading = false;
+          if (this.again) { this.again = false; this.refresh(cx); }
+        }
+        cx.notify();
+      }
     });
   }
 
@@ -301,7 +319,7 @@ export default class Files extends View {
       if (value) this.input.set_selected_range({ start: 0, end: dot > 0 ? dot : value.length });
       this.input.on("submit", (_e, cx) => this.commitEdit(cx));
       this.input.on("blur", (_e, cx) => { if (this.edit && !this.editBusy) this.cancelEdit(cx); });
-      this.edit = { ...req, at, editError: null };
+      this.edit = { ...req, at, dir: folder, on: this.on, space: this.context.space, editError: null }; // where it was asked, even if the tree moves on
       cx.notify();
       cx.timer.after(50, () => this.input?.focus());
     });
@@ -314,18 +332,18 @@ export default class Files extends View {
     if (!e) return;
     if (!name || name === e.path?.split("/").pop()) return this.cancelEdit(cx);
     if (name.includes("/") || name === "." || name === "..") { e.editError = "No / in names"; cx.notify(); return; }
-    const dir = e.at ? `${this.root}/${e.at}` : this.root, target = `${dir}/${name}`;
+    const target = `${e.dir}/${name}`;
     const script = e.kind === "file" ? `[ ! -e ${q(target)} ] && : > ${q(target)}`
       : e.kind === "folder" ? `[ ! -e ${q(target)} ] && mkdir ${q(target)}`
       : `[ ! -e ${q(target)} ] && mv ${q(e.path)} ${q(target)}`;
     this.editBusy = true;
     cx.spawn(async cx => {
-      const r = await exec("sh", ["-c", script], { on: this.on }).catch(err => ({ code: 1, stderr: String(err) }));
+      const r = await exec("sh", ["-c", script], { on: e.on }).catch(err => ({ code: 1, stderr: String(err) }));
       this.editBusy = false;
       if (r.code !== 0) { e.editError = r.stderr.trim() || `${name} already exists`; this.input.focus(); cx.notify(); return; }
       this.cancelEdit(cx);
       this.refresh(cx);
-      if (e.kind === "file") openFile(this.context.space, target, this.on, iconFor(name, false, this.config, { dark: settings().dark !== false }), { keep: true });
+      if (e.kind === "file") openFile(e.space, target, e.on, iconFor(name, false, this.config, { dark: settings().dark !== false }), { keep: true });
     });
   }
 
