@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Popover, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { spaces, panes, focused, exec, watchFolder, theme, settings, props, run, shared, setShared } from "herdr";
+import { spaces, panes, focused, exec, watchFolder, theme, settings, props, run, shared, setShared, window } from "herdr";
 import { parseStatus, parseNumstat, checkState, treeRows, ago } from "./git.js";
 import GitGraph from "./graph.js";
 
@@ -44,7 +44,8 @@ export default class SourceControl extends View {
     this.filter.on("submit", (_e, cx) => { const first = this.branchItems()[0]; if (first) { this.menu = null; first.pick(cx); } });
     if (this.tab === "history") this.graph = cx.new(GitGraph);
     this.refresh(cx);
-    cx.timer.every(10000, (cx) => this.refresh(cx));
+    // Only while the window is in front: each refresh is several git runs, remote ones over ssh.
+    cx.timer.every(10000, (cx) => { if (window()?.active !== false) this.refresh(cx); });
   }
 
   git(args) { return exec("git", [...READ, ...args], { cwd: this.repo, on: this.on }); }
@@ -111,6 +112,8 @@ export default class SourceControl extends View {
     const files = all.slice(0, LIMIT).map((f) => Object.assign(f, stats[f.path] ?? {}));
     if (gen !== this.gen || repo !== this.repo) return;
     this.files = files; this.limited = all.length > LIMIT;
+    // Stage All and Commit act on every change, not only the LIMIT shown.
+    this.allState = checkState(all);
     this.head = { hash, subject };
     this.branch = branch.code === 0 ? branch.stdout.trim() : hash ? `(detached ${hash.slice(0, 7)})` : "";
     this.detached = branch.code !== 0;
@@ -165,8 +168,15 @@ export default class SourceControl extends View {
     if (!files.length) return;
     const paths = files.map((f) => f.path);
     // ponytail: every path goes on one command line; batch it if a huge folder hits ARG_MAX.
-    if (checkState(files) === "all") this.act("Unstaging", [this.head?.hash ? ["restore", "--staged", "--", ...paths] : ["rm", "--cached", "-r", "-q", "--", ...paths]], cx);
-    else this.act("Staging", [["add", "--", ...paths]], cx);
+    // --literal-pathspecs: a name like "log[1].md" must not also match "log1.md".
+    if (checkState(files) === "all") this.act("Unstaging", [this.head?.hash ? ["--literal-pathspecs", "restore", "--staged", "--", ...paths] : ["--literal-pathspecs", "rm", "--cached", "-r", "-q", "--", ...paths]], cx);
+    else this.act("Staging", [["--literal-pathspecs", "add", "--", ...paths]], cx);
+  }
+
+  // The whole repo at once: covers changes past LIMIT and never hits ARG_MAX.
+  stageAll(staged, cx) {
+    if (staged) this.act("Unstaging", [this.head?.hash ? ["restore", "--staged", ":/"] : ["rm", "--cached", "-r", "-q", ":/"]], cx);
+    else this.act("Staging", [["add", "-A"]], cx);
   }
 
   pushArgs() { return this.upstream ? ["push"] : ["push", "-u", this.remotes[0] ?? "origin", this.branch]; }
@@ -174,7 +184,7 @@ export default class SourceControl extends View {
   commit(mode, cx) {
     const message = this.message.trim();
     if ((!message && mode !== "amend") || !this.files.length && mode !== "amend") return;
-    const staged = this.files.some((f) => f.staged !== "none");
+    const staged = this.allState !== "none";
     const steps = [];
     // Nothing staged: commit every change, like the old Changes panel.
     if (!staged && mode !== "amend") steps.push(["add", "-A"]);
@@ -281,7 +291,7 @@ export default class SourceControl extends View {
   toolbar(t) {
     const add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
     const compact = (this.size?.width ?? 400) < 400, mode = shared("git-diff.mode") === "unified" ? "unified" : "split";
-    const allStaged = this.files.length > 0 && checkState(this.files) === "all", none = !this.files.length || Boolean(this.busy);
+    const allStaged = this.files.length > 0 && this.allState === "all", none = !this.files.length || Boolean(this.busy);
     const more = [
       { label: "Stash all changes", icon: "stash", pick: (cx) => this.act("Stashing", [["stash", "push", "--include-untracked"]], cx) },
       { label: "Fetch", icon: "pull", pick: (cx) => this.act("Fetching", [["fetch", "--all", "--prune"]], cx) },
@@ -299,7 +309,7 @@ export default class SourceControl extends View {
         this.button("sc-unified", "unified", null, () => setShared("git-diff.mode", "unified"), t, { active: mode === "unified" }),
         this.button("sc-split", "split", null, () => setShared("git-diff.mode", "split"), t, { active: mode === "split" })))
       .child(this.pop("sc-more", this.button("sc-more-btn", "refresh", null, () => {}, t), this.menuList("sc-more", more, t, 200)))
-      .child(this.button("sc-stageall", allStaged ? "minus" : "plus", allStaged ? "Unstage All" : "Stage All", (cx) => this.toggle(this.files, cx), t, { disabled: none, compact }));
+      .child(this.button("sc-stageall", allStaged ? "minus" : "plus", allStaged ? "Unstage All" : "Stage All", (cx) => this.stageAll(allStaged, cx), t, { disabled: none, compact }));
   }
 
   groupRow(id, label, files, count, t, withCheck = true) {
@@ -373,7 +383,7 @@ export default class SourceControl extends View {
       { label: "Fetch", icon: "refresh", pick: (cx) => this.act("Fetching", [["fetch", "--all", "--prune"]], cx) },
     ];
     const canCommit = Boolean(this.message.trim() && this.files.length && this.repo && !this.busy);
-    const staged = this.files.some((f) => f.staged !== "none");
+    const staged = this.allState !== "none";
     const commitItems = [
       { label: "Commit & Push", icon: "push", pick: (cx) => this.commit("push", cx) },
       { label: "Amend last commit", icon: "undo", pick: (cx) => this.commit("amend", cx) },

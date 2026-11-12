@@ -62,17 +62,6 @@ export function treeRows(files, collapsed, group = "") {
   return rows;
 }
 
-// `%D` -> ref chips: { kind: "head" | "branch" | "remote" | "tag", name }.
-export function parseRefs(d) {
-  return d.split(", ").map((r) => r.trim()).filter(Boolean).flatMap((r) => {
-    if (r === "HEAD") return [{ kind: "head", name: "HEAD" }];
-    if (r.startsWith("HEAD -> ")) return [{ kind: "head", name: r.slice(8) }];
-    if (r.startsWith("tag: ")) return [{ kind: "tag", name: r.slice(5) }];
-    if (r.endsWith("/HEAD")) return [];
-    return [{ kind: r.includes("/") ? "remote" : "branch", name: r }];
-  });
-}
-
 export function ago(sec) {
   const d = Date.now() / 1000 - sec;
   if (d < 60) return `${Math.max(1, Math.round(d))}s ago`;

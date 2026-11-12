@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
-import { exec, theme, settings, shared, setShared, panes, run } from "herdr";
+import { exec, theme, settings, shared, setShared, panes, run, window } from "herdr";
 import { pairRows, unifiedRows, countPatch } from "./diff.js";
 
 // The diff preview tab. source-control opens one tab of this and reuses it; it shows
@@ -8,7 +8,7 @@ import { pairRows, unifiedRows, countPatch } from "./diff.js";
 //   { repo, on, hash, path?, subject?, author?, time? }  a commit (path: one file, else every file)
 //   { repo, on, path, worktree: true, untracked? }       HEAD ↔ working tree of one file
 // shared("git-diff.mode") is "split" (default) or "unified"; source-control toggles it too.
-const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
+const READ = ["--literal-pathspecs", "--no-optional-locks", "-c", "core.fsmonitor=false"];
 const ROW = 20, DEL = "#f85149", ADD = "#3fb950", ICON = "mods/source-control/";
 // A virtual list needs one row height: every row, file headers too, is ROW tall.
 // Working-tree target without a path: every tracked change (HEAD ↔ working tree).
@@ -42,7 +42,7 @@ export default class GitDiff extends View {
       if (tab) { this.tab = tab; setShared("git-diff.previewTab", tab); }
     });
     // A working-tree diff changes under us: reload it now and then.
-    cx.timer.every(4000, (cx) => { if (this.target()?.worktree) this.load(this.target(), cx); });
+    cx.timer.every(4000, (cx) => { if (this.target()?.worktree && window()?.active !== false) this.load(this.target(), cx); });
   }
 
   target() { return shared("git-diff.preview"); }

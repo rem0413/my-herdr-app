@@ -1,6 +1,6 @@
 // node mods/source-control/git.test.mjs
 import assert from "node:assert/strict";
-import { parseStatus, parseNumstat, checkState, treeRows, parseRefs } from "./git.js";
+import { parseStatus, parseNumstat, checkState, treeRows } from "./git.js";
 
 const files = parseStatus(["M  src/ui/list.ts", " M src/app.ts", "AM new.ts", "?? docs/import.md", "UU c.ts", " D gone.ts", ""].join("\0"));
 assert.deepEqual(files.map((f) => [f.path, f.letter, f.staged, f.untracked]), [
@@ -26,6 +26,4 @@ assert.deepEqual(rows.map((r) => `${r.depth}${r.dir ? "D" : "F"}:${r.name}${r.di
   ["0D:a/b/c#1", "1F:d.ts", "0D:src#2", "1D:ui#1", "2F:list.ts", "1F:app.ts"]);
 assert.deepEqual(treeRows(tracked, new Set(["t:src"]), "t").map((r) => r.name), ["src"]);
 
-assert.deepEqual(parseRefs("HEAD -> main, origin/main, origin/HEAD, tag: v1"),
-  [{ kind: "head", name: "main" }, { kind: "remote", name: "origin/main" }, { kind: "tag", name: "v1" }]);
 console.log("ok");

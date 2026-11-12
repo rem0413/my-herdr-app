@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list, VirtualListScrollHandle, InputState, Input, Popover, h_resizable, v_resizable, resizable_panel } from "gpui-base";
-import { spaces, panes, focused, exec, theme, settings, props, run, shared, setShared } from "herdr";
+import { spaces, panes, focused, exec, theme, settings, props, run, shared, setShared, window } from "herdr";
 import { treeRows } from "./git.js";
 
 // Same folder resolution as the shipped Changes panel: the focused pane's repo.
@@ -90,7 +90,7 @@ export default class GitGraph extends View {
     this.find.on("change", (_e, cx) => { this.query = this.find.value(); this.computeMatches(); this.jump(0); cx.notify(); });
     this.find.on("submit", (_e, cx) => { this.jump(this.match + 1); cx.notify(); });
     this.refresh(cx);
-    cx.timer.every(15000, (cx) => this.refresh(cx));
+    cx.timer.every(15000, (cx) => { if (window()?.active !== false) this.refresh(cx); });
   }
 
   git(args, repo = this.repo) { return exec("git", [...READ, ...args], { cwd: repo, on: this.on }); }
