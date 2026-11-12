@@ -16,7 +16,6 @@ import { readTextFile, writeTextFile, exec, props, panes, spaces, theme, setting
 import { language, syntaxFor } from "./lang.js";
 
 const base = (p) => p.split(/[\\/]/).pop();
-const dir = (p) => p.slice(0, p.length - base(p).length - 1) || "/";
 const ICON = "mods/file-editor";
 const PICTURE = /\.(png|jpe?g|gif|webp|bmp|ico|tiff?)$/i;
 const SVG = /\.svg$/i;
@@ -65,7 +64,7 @@ const PDF_ERRORS = { locked: "PDF is password-protected", empty: "PDF has no pag
 // One exec per poll: "<mtime> <size> <writable>" (or "missing"), then the git porcelain XY of the file.
 const STAT = `f="$1"; if [ ! -e "$f" ]; then echo missing; exit 0; fi
 s=$(stat -c '%Y %s' "$f" 2>/dev/null || stat -f '%m %z' "$f"); w=0; [ -w "$f" ] && w=1; echo "$s $w"
-cd "$(dirname "$f")" 2>/dev/null && git --no-optional-locks -c core.fsmonitor=false status --porcelain=v1 -- "$(basename "$f")" 2>/dev/null | head -1 | cut -c1-2`;
+cd "$(dirname "$f")" 2>/dev/null && git --literal-pathspecs --no-optional-locks -c core.fsmonitor=false status --porcelain=v1 -- "$(basename "$f")" 2>/dev/null | head -1 | cut -c1-2`;
 async function stat(path, on) {
   const r = await exec("sh", ["-c", STAT, "stat", path], { on, timeout: 10000 });
   const [head = "", xy = ""] = r.stdout.split("\n");
@@ -79,15 +78,23 @@ async function stat(path, on) {
 // arg-sized chunks (exec has no stdin; NUL is already rejected on load).
 async function writeRemote(path, text, expected, on) {
   if ((await readTextFile(path, { on })) !== expected) throw new Error("Changed on disk since it was opened. Reload it first.");
-  const tmp = `${path}.herdr-save`;
   const sh = async (script, ...args) => {
     const r = await exec("sh", ["-c", script, "save", ...args], { on });
     if (r.code !== 0) throw new Error(r.stderr || "write failed");
+    return r.stdout;
   };
-  await sh(': > "$1"', tmp);
-  for (let i = 0; i < text.length; i += 30000) await sh('printf %s "$2" >> "$1"', tmp, text.slice(i, i + 30000));
-  // cat > keeps the file's permissions and owner.
-  await sh('cat "$1" > "$2" && rm -f "$1"', tmp, path);
+  // The temp sits beside the link's target, so the final mv replaces the target, not the link.
+  const real = (await sh('readlink -f "$1" 2>/dev/null || printf %s "$1"', path)).trim() || path;
+  const tmp = `${real}.herdr-save`;
+  // cp -p gives the temp the file's permissions; then the mv swaps it in whole, so a dropped
+  // connection never leaves the original half written.
+  await sh('cp -p "$1" "$2" && : > "$2"', real, tmp);
+  for (let i = 0, j; i < text.length; i = j) {
+    j = Math.min(i + 30000, text.length);
+    if (j < text.length && /[\uD800-\uDBFF]/.test(text[j - 1])) j--; // never split an emoji's surrogate pair
+    await sh('printf %s "$2" >> "$1"', tmp, text.slice(i, j));
+  }
+  await sh('mv -f "$1" "$2"', tmp, real);
 }
 
 // SVG viewBox size, and a copy whose root width/height are large: the host rasterizes an SVG at its
