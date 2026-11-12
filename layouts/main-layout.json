@@ -28,7 +28,6 @@
             {
               "id": "sidebar-lists",
               "type": "stack",
-              "active": "spaces",
               "children": [
                 {
                   "id": "spaces",
@@ -44,7 +43,8 @@
                     "mod": "workspace-agents"
                   }
                 }
-              ]
+              ],
+              "active": "spaces"
             },
             {
               "id": "sidebar-footer",
@@ -165,6 +165,16 @@
                   },
                   "size": {
                     "px": 150
+                  }
+                },
+                {
+                  "id": "usage",
+                  "type": "block",
+                  "content": {
+                    "mod": "usage"
+                  },
+                  "size": {
+                    "px": 430
                   }
                 },
                 {
