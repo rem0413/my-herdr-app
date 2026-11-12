@@ -25,7 +25,7 @@ const CACHE = "data/file-editor";
 const PLAIN_AT = 150 * 1024;     // larger: no highlighting or folding (they re-parse per keystroke)
 const READ_MAX = 1024 * 1024;    // readTextFile's limit; larger files show their first MB, read-only
 const MD_PREVIEW_MAX = 300 * 1024; // larger Markdown opens in Code view
-const REMOTE_PICTURE_MAX = 6 * 1024 * 1024; // base64 must fit exec's 8 MiB output
+const REMOTE_PICTURE_MAX = 5.5 * 1024 * 1024; // base64 (plus line breaks) must fit exec's 8 MiB output
 const ZOOMS = [0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 8];
 const LANG_NAME = { js: "JavaScript", json: "JSON", yaml: "YAML", html: "HTML", xml: "XML", css: "CSS", python: "Python", rust: "Rust",
   go: "Go", bash: "Shell", sql: "SQL", java: "Java", c: "C", lua: "Lua", ruby: "Ruby", text: "Text", markdown: "Markdown", md: "Markdown" };
@@ -212,6 +212,8 @@ export default class FileEditor extends View {
         else text = await readTextFile(this.file, { on: this.on });
         if (text === null) { this.error = "This file is no longer on disk"; return; }
         if (text.includes("\0")) { this.error = "Binary file · no text view"; return; }
+        // Invalid UTF-8 arrives as U+FFFD: saving would replace those bytes, so such files open read-only.
+        this.lossy = text.includes("\uFFFD");
         if (!this.cfg) {
           const cfgText = await readTextFile(`${appHome()}/file-editor.json`).catch(() => null);
           try { this.cfg = cfgText ? JSON.parse(cfgText) : {}; } catch (e) { this.cfg = {}; notify({ title: "file-editor.json is invalid", body: String(e), level: "error" }); }
@@ -240,7 +242,7 @@ export default class FileEditor extends View {
     const fallback = { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 };
     const lang = this.lang === "markdown" ? "text" : this.lang;
     this.state = EditorState.new({ language: lang, folding: !this.plain, value: text, soft_wrap: this.wrap,
-      readonly: this.truncated || this.writable === false,
+      readonly: this.truncated || this.writable === false || this.lossy,
       font_family: settings().font_family, font_size: 13, syntax: { ...fallback, ...syntaxFor(lang, this.cfg) } });
     // ponytail: no full-text compare per keystroke (slow on big files); undo back to original stays dirty.
     this.state.on("change", (_e, cx) => {
@@ -355,6 +357,7 @@ export default class FileEditor extends View {
   // then: runs after a successful save (or at once when there is nothing to save).
   save(cx, then) {
     if (!this.state || !this.dirty) return then?.();
+    if (this.lossy) return;
     if (this.saving) return;
     const text = this.state.value();
     this.saving = true;
@@ -363,11 +366,12 @@ export default class FileEditor extends View {
       try {
         if (this.on) await writeRemote(this.file, text, this.original, this.on);
         else await writeTextFile(this.file, text, this.original);
-        this.original = text; this.dirty = false; this.conflict = false; this.lines = text.split("\n").length;
+        // Typing during the write stays unsaved (and keeps the tab open for a save-and-close).
+        this.original = text; this.dirty = this.state.value() !== text; this.conflict = false; this.lines = text.split("\n").length;
         const s = await stat(this.file, this.on).catch(() => null);
         if (s && !s.missing) { this.stamp = s.stamp; this.size = s.size; this.git = s.git; }
         this.publish();
-        then?.();
+        if (!this.dirty) then?.();
       } catch (e) {
         notify({ title: `Not saved: ${base(this.file)}`, body: String(e?.message ?? e), level: "error" });
       }
@@ -420,7 +424,7 @@ export default class FileEditor extends View {
       : picture
       ? [this.dims && `${this.dims.w}×${this.dims.h}`, this.size != null && kb(this.size)]
       : [this.lines != null && `${this.lines} lines`, LANG_NAME[this.lang] ?? this.lang, this.size != null && kb(this.size)];
-    const notes = [this.on, this.truncated && `showing first ${kb(READ_MAX)} · read-only`, !this.truncated && this.plain && "large · no highlighting",
+    const notes = [this.on, this.truncated && `showing first ${kb(READ_MAX)} · read-only`, !this.truncated && this.plain && "large · no highlighting", this.lossy && "not valid UTF-8 · read-only",
       this.writable === false && "read-only", this.saving && "Saving…"].filter(Boolean);
     const seg = (id, icon, label, mode) => h_flex().id(id).h(22).px(8).gap(5).items_center().rounded(4).text_size(11)
       .bg(this.mode === mode ? t.selected : t.background).text_color(this.mode === mode ? t.foreground : t.muted)
@@ -445,7 +449,7 @@ export default class FileEditor extends View {
       .when(!showsPicture && Boolean(this.state), (el) => el.child(this.button(t, "fe-wrap", "wrap.svg", `Wrap long lines (⌥Z) · ${this.wrap ? "on" : "off"}`, (cx) => this.toggleWrap(cx), { on: this.wrap })))
       .child(this.button(t, "fe-copy", "copy.svg", picture ? "Copy path" : "Copy file text", (cx) => this.copy(cx)))
       .child(this.button(t, "fe-reload", "refresh.svg", this.dirty ? "Reload from disk (drops your edits)" : "Reload from disk", (cx) => { this.dirty = false; this.publish(); this.load(cx); }))
-      .when(!picture, (el) => el.child(this.truncated || this.writable === false
+      .when(!picture, (el) => el.child(this.truncated || this.writable === false || this.lossy
         ? this.button(t, "fe-lock", "lock.svg", "Read-only", () => {}, { disabled: true })
         : this.button(t, "fe-save", "save.svg", this.dirty ? "Save (⌘S)" : "Saved", (cx) => this.save(cx), { accent: this.dirty, disabled: !this.dirty })));
   }

@@ -76,6 +76,18 @@ try {
   assert.equal(closed, false, 'failed save must not close tab');
   assert.equal(notices.at(-1).level, 'error');
 
+  // Typing while a save is in flight stays unsaved, and a save-and-close keeps the tab open.
+  await writeFile(file, 'edited');
+  let buffer = 'second';
+  Object.assign(editor, { original: 'edited', dirty: true, state: { value: () => buffer } });
+  closed = false;
+  editor.save(cx, () => { closed = true; });
+  buffer = 'second, then more';
+  await Promise.all(jobs.splice(0));
+  assert.equal(await readFile(file, 'utf8'), 'second');
+  assert.equal(editor.dirty, true, 'edits typed during a save stay dirty');
+  assert.equal(closed, false, 'save-and-close must not drop edits typed during the save');
+
   // Remote save, with a real sh: through a symlink, keeping the mode, an emoji across a chunk edge.
   execImpl = (cmd, args) => new Promise(res => execFile(cmd, args, (e, stdout, stderr) => res({ code: e ? e.code ?? 1 : 0, stdout, stderr })));
   const target = join(folder, 'remote.md'), link = join(folder, 'link.md');
@@ -87,4 +99,4 @@ try {
   assert.equal((await stat(target)).mode & 0o777, 0o640, 'remote save keeps the mode');
   await assert.rejects(writeRemote(link, 'x', 'stale', 'vps'), /Changed on disk/);
 } finally { await rm(folder, { recursive: true, force: true }); }
-console.log('PASS: preview replacement, dirty preservation, promotion, reuse, save, conflict protection, remote save');
+console.log('PASS: preview replacement, dirty preservation, promotion, reuse, save, conflict protection, edits during save, remote save');
