@@ -26,6 +26,7 @@ export default class ModManager extends View {
     this.sources = {};    // mod-sources.json
     this.updates = {};    // name -> "<old> -> <new>" | "up to date" | error text
     this.busy = null;     // "check:<mod>" while checking, "<mod>" while updating
+    this.confirmUpdate = null; // an edited mod whose Update waits for confirmation
     this.filter = "all";
     this.message = null;
     this.layoutTrees = [];
@@ -113,20 +114,30 @@ export default class ModManager extends View {
     this.busy = `check:${name}`; this.message = `Checking ${name}…`; cx.notify();
     cx.spawn(async cx => {
       const r = await this.sh('./update-mods.sh -n "$1"', [name], 60000).catch(e => ({ code: 1, stdout: "", stderr: String(e) }));
-      const m = r.stdout.match(new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: (.*)$`, "m"));
-      if (m) this.updates[name] = m[1];
-      this.message = r.code || !m ? `Check of ${name} failed: ${(r.stderr || r.stdout).trim().split("\n").pop()}`
-        : m[1].includes("->") ? `${name}: update available` : `${name} is up to date`;
+      const m = this.result(name, r.stdout);
+      // Only "up to date (…)" and "<old> -> <new>" are answers; anything else (ref not found, offline) failed.
+      const ok = r.code === 0 && Boolean(m) && (m.startsWith("up to date (") || m.includes(" -> "));
+      if (ok) this.updates[name] = m;
+      this.message = !ok ? `Check of ${name} failed: ${(m || r.stderr || r.stdout).trim().split("\n").pop()}`
+        : m.includes(" -> ") ? `${name}: update available` : `${name} is up to date`;
       this.busy = null; cx.notify();
     });
   }
 
+  // The script's last line for `name` ("<mod>: <text>" -> "<text>"), or null.
+  result(name, stdout) {
+    const re = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: (.*)$`, "gm");
+    return [...String(stdout ?? "").matchAll(re)].pop()?.[1] ?? null;
+  }
+
   update(name, cx) {
+    this.confirmUpdate = null;
     this.busy = name; this.message = `Updating ${name}…`; cx.notify();
     cx.spawn(async cx => {
       const r = await this.sh('./update-mods.sh "$1"', [name], 180000).catch(e => ({ code: 1, stdout: "", stderr: String(e) }));
-      const ok = r.code === 0 && r.stdout.includes("check passed");
-      this.message = ok ? `${name} updated` : `Update of ${name} failed: ${(r.stderr || r.stdout).trim().split("\n").pop()}`;
+      const current = r.code === 0 && Boolean(this.result(name, r.stdout)?.startsWith("up to date ("));
+      const ok = r.code === 0 && (r.stdout.includes("check passed") || current);
+      this.message = current ? `${name} is already up to date` : ok ? `${name} updated` : `Update of ${name} failed: ${(r.stderr || r.stdout).trim().split("\n").pop()}`;
       if (ok) this.updates[name] = "up to date";
       notify({ title: this.message, level: ok ? "success" : "error", timeout: 5000 });
       this.busy = null;
@@ -228,8 +239,16 @@ export default class ModManager extends View {
         mod: "mod-manager", kind: "dialog", width: 420, height: 230,
         props: { mode: "delete", name: m.name },
       })))
-      .when(Boolean(src), el => el.child(hasUpdate
-        ? this.icon(t, `u-${m.name}`, "mods/mod-manager/update.svg", `Update to ${upd.split("-> ")[1].slice(0, 7)}`, Boolean(this.busy), (_e, cx) => this.update(m.name, cx), this.busy === m.name, true)
+      // update-mods.sh replaces the folder, so an edited mod asks first: uncommitted and new files are lost.
+      .when(Boolean(src) && this.confirmUpdate === m.name, el => el
+        .child(div().text_size(10).text_color(t.blocked).child("Overwrite local edits?"))
+        .child(div().id(`u-no-${m.name}`).px(8).py(2).rounded(4).bg(t.raised).text_size(11).hover(s => s.bg(t.hover))
+          .on_click((_e, cx) => { this.confirmUpdate = null; cx.notify(); }).child("Cancel"))
+        .child(div().id(`u-yes-${m.name}`).px(8).py(2).rounded(4).bg(t.blocked).text_color(t.background).text_size(11)
+          .when(!this.busy, el => el.on_click((_e, cx) => this.update(m.name, cx))).child("Update")))
+      .when(Boolean(src) && this.confirmUpdate !== m.name, el => el.child(hasUpdate
+        ? this.icon(t, `u-${m.name}`, "mods/mod-manager/update.svg", `Update to ${upd.split("-> ")[1].slice(0, 7)}${m.changed ? " (overwrites local edits)" : ""}`, Boolean(this.busy),
+          (_e, cx) => { if (m.changed) { this.confirmUpdate = m.name; cx.notify(); } else this.update(m.name, cx); }, this.busy === m.name, true)
         : this.icon(t, `c-${m.name}`, "mods/mod-manager/check.svg", "Check for update", Boolean(this.busy), (_e, cx) => this.check(m.name, cx), this.busy === `check:${m.name}`)))
       .child(can ? this.switch(t, `s-${m.name}`, !isOff, () => this.toggle(m))
         : div().w(34).text_size(10).text_color(t.dim).child("—"));
@@ -301,12 +320,13 @@ export default class ModManager extends View {
         const path = `${appHome()}/mod-sources.json`;
         const expected = await readTextFile(path);
         const sources = JSON.parse(expected ?? "{}");
-        const result = await exec("rm", ["-rf", "--", `${appHome()}/mods/${name}`]);
-        if (result.code !== 0) throw new Error(result.stderr || "Delete failed");
+        // Unlist first: a failed write leaves the folder, never a listed source that update-mods.sh would reinstall.
         if (sources[name]) {
           delete sources[name];
           await writeTextFile(path, JSON.stringify(sources, null, 2) + "\n", expected);
         }
+        const result = await exec("rm", ["-rf", "--", `${appHome()}/mods/${name}`]);
+        if (result.code !== 0) throw new Error(result.stderr || "Delete failed");
         setShared(OFF_KEY, off().filter(n => n !== name));
         run("mod-manager.refresh");
         notify({ title: `Deleted ${name}`, level: "success" });

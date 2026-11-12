@@ -13,7 +13,8 @@ for m in "$@"; do
   e=$(jq -ec --arg m "$m" '.[$m]' "$SRC") || { echo "$m: not in $SRC"; continue; }
   repo=$(echo "$e" | jq -r .repo); path=$(echo "$e" | jq -r .path)
   ref=$(echo "$e" | jq -r '.ref // "main"'); old=$(echo "$e" | jq -r '.commit // ""')
-  new=$(git ls-remote "$repo" "$ref" | cut -f1)
+  # ls-remote matches ref suffixes (refs/heads/x, refs/remotes/o/x, refs/tags/x): keep the first exact one.
+  new=$(git ls-remote "$repo" "$ref" | awk -v r="$ref" '$2 == "refs/heads/" r || $2 == "refs/tags/" r || $2 == r { print $1; exit }')
   [ -n "$new" ] || { echo "$m: ref $ref not found in $repo"; continue; }
   [ "$new" = "$old" ] && { echo "$m: up to date (${old%"${old#???????}"})"; continue; }
   echo "$m: ${old:-none} -> $new"
@@ -22,6 +23,8 @@ for m in "$@"; do
   d="$TMP/$m"
   { git clone -q --depth 1 --filter=blob:none --sparse -b "$ref" "$repo" "$d" &&
     git -C "$d" sparse-checkout set "$path"; } || { echo "$m: clone failed, skipped"; continue; }
+  # Record what was cloned: the ref may have moved since ls-remote.
+  new=$(git -C "$d" rev-parse HEAD)
   [ -f "$d/$path/main.js" ] || { echo "$m: $path/main.js missing upstream, skipped"; continue; }
   # Check the new version before it replaces the running one.
   herdr-app check "$d/$path" || { echo "$m: upstream $new fails herdr-app check, kept the old version"; continue; }
