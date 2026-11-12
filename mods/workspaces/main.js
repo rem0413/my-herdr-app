@@ -7,7 +7,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, machines, panes, agents, knownAgents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, agents, terminals, knownAgents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 import { EMPTY, canParent, flatten, reconcile, setColor, setParent, startReopen, toggleFold, togglePin } from "./tree.js";
 import { PRStatusObserver, prAppearance } from "./pr-status.js";
 
@@ -76,6 +76,21 @@ function rail(t, last) {
     .child(div().absolute().left(0).top(0).w(1.5).bg(t.input).when(last, (el) => el.h(13)).when(!last, (el) => el.bottom(0)))
     .child(div().absolute().left(0).top(12).w(9).h(1.5).bg(t.input));
 }
+
+// Live sub-agents of `addr`, depth first, each with its tree lines: terminals started with a
+// parent (hc run), and agents' in-process subagents the workspace-agents mod shares.
+function subTree(pool, addr, lead = []) {
+  if (lead.length > 8) return [];
+  const kids = pool.filter((k) => k.parent === addr && k.state === "live");
+  return kids.flatMap((k, i) => {
+    const last = i === kids.length - 1;
+    return [{ k, lines: [...lead, last ? "└" : "├"] }, ...subTree(pool, k.address, [...lead, last ? "" : "│"])];
+  });
+}
+
+// A sub-agent's raw word, as the agents list reads it: error is blocked, and it's never done
+// (it reports to its parent).
+const subStatus = (s) => (s === "error" ? "blocked" : s === "done" ? "idle" : s);
 
 // Spaces | Agents tabs over the sidebar-lists stack; the agents mod draws the same bar.
 export function listTabs(t, on, agentKeys = new Set()) {
@@ -584,7 +599,8 @@ export default class Spaces extends View {
     if (entry.folded || shared("hibernate.sleeping")?.[w.id]) return [];
     const shownTab = w.active ? focused()?.tab : null;
     const tabs = (w.tabs ?? []).filter((tab) => !tab.settled);
-    return tabs.map((tab, i) => {
+    const pool = [...terminals().filter((k) => k.parent), ...(shared("agents.children") ?? [])];
+    return tabs.flatMap((tab, i) => {
       const mine = ps.filter((p) => p.tab === tab.id);
       const lead = mine.find((p) => p.program?.agent) ?? mine.find((p) => p.focused) ?? mine[0];
       const status = all.filter((a) => a.tab === tab.id).reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
@@ -594,7 +610,9 @@ export default class Spaces extends View {
       const live = (lead?.title ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
       const telling = live && live !== prog && !/^[~/]|^[A-Za-z]:\\/.test(live) && !live.includes("@") && live.toLowerCase() !== lead?.program?.key;
       const detail = lead?.mod ? null : telling ? live : prog;
-      return h_flex()
+      const subs = mine.filter((p) => p.terminal).flatMap((p) => subTree(pool, p.terminal));
+      const last = i === tabs.length - 1;
+      return [h_flex()
         .id(`tab-${tab.id}`)
         .h(26)
         .flex_none()
@@ -607,12 +625,34 @@ export default class Spaces extends View {
         .when(lit, (el) => el.bg(t.raised))
         .when(!lit, (el) => el.hover((s) => s.bg(t.hover)))
         .on_click(() => { run("space.select", { id: w.id }); run("tab.select", { id: tab.id }); })
-        .child(rail(t, i === tabs.length - 1))
+        .child(rail(t, last))
         .child(progIcon(lead?.program, 14, t.dim))
         .child(div().flex_shrink(0).max_w(130).truncate().text_size(12).text_color(lit ? t.foreground : t.muted).child(tab.name))
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(detail && detail !== tab.name ? detail : ""))
-        .when(Boolean(status), (el) => el.child(statusMark(t, status)));
+        .when(Boolean(status), (el) => el.child(statusMark(t, status))),
+      ...subs.map((s) => this.subRow(s, t, depth, last))];
     });
+  }
+
+  // A sub-agent under its tab, display only: the space's rail carries on past it to the next tab.
+  subRow({ k, lines }, t, depth, lastTab) {
+    const st = subStatus(k.status);
+    return h_flex()
+      .id(`tab-sub-${k.address}`)
+      .h(24)
+      .flex_none()
+      .pl(depth > 0 ? 38 + 14 * depth : 31)
+      .pr(8)
+      .items_center()
+      .child(div().relative().w(10).h(24).flex_none()
+        .when(!lastTab, (el) => el.child(div().absolute().left(0).top(0).bottom(0).w(1.5).bg(t.input))))
+      .children(lines.map((l) => div().relative().w(12).h(24).flex_none()
+        .when(l === "│" || l === "├", (el) => el.child(div().absolute().left(4).top(0).bottom(0).w(1.5).bg(t.input)))
+        .when(l === "└", (el) => el.child(div().absolute().left(4).top(0).h(12).w(1.5).bg(t.input)))
+        .when(l === "└" || l === "├", (el) => el.child(div().absolute().left(4).top(11).w(7).h(1.5).bg(t.input)))))
+      .child(div().ml(2).mr(6).child(progIcon(k.program, 12, t.dim)))
+      .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(k.name || k.template || k.program?.name || k.address))
+      .when(Boolean(st), (el) => el.child(statusMark(t, st)));
   }
 
   // The checkout's newest PR at the row's right: icon and number in its state's color.

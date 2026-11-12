@@ -4,6 +4,7 @@ Personal clone of Herdr Spaces. `layouts/main-layout.json` uses `workspaces` and
 
 - `sidebar-lists` is a stack: the Spaces | Agents bar at the top of each mod switches it with `layout.select`.
 - Each space lists its tabs (not settled) under it on a tree line: an icon for the program running now, the tab name, then the agent state (spinner = working, dot = done, ring = idle, "Needs you" = blocked). Clicking a row opens that tab.
+- Under each tab, its agents' live sub-agents on a nested tree line, display only: terminals started with a parent (`hc run`) and in-process subagents of Claude Code, Codex and OMP. The latter come from `shared("agents.children")`, which `workspace-agents` reads and publishes, so they need that mod in the layout (a hidden stack child still publishes).
 - The checkout's newest PR sits at the right of the row (`pr-status.js`, from munza/herdr-mods better-sidebar, Apache-2.0). Green = open, gray = draft, purple = merged, red = closed or checks failed. Cmd-click opens it. It needs `gh` logged in locally and refreshes at most once a minute.
 
 - Drag onto the top/bottom half of a row and release promptly to reorder before/after it, at its parent level. A horizontal line previews insertion. Hold over the row for 700 ms until its border highlights to make it a child instead. Child rows use folder icons. Descendants move with their parent. Cycles and cross-machine parents are refused; terminals are never migrated between machines.
