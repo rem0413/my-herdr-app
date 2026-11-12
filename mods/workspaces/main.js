@@ -45,10 +45,6 @@ const colorDot = (t, key) => div().size(7).rounded(4).flex_none().bg(HEX[key] ??
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
 
-// What a stored color name looks like on an avatar (the same in every mod
-// that draws space avatars): one strong color per hue, light and dark alike.
-const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
-
 // A space speaks up only when something in it needs you.
 export function glyph(status) {
   return status === "blocked" || status === "done" ? "●" : "·";
@@ -271,6 +267,9 @@ export default class Spaces extends View {
         this.pending.clear();
         for (const key of keys) await this.check(key, cx);
       }
+      // Forget places no space is in any more, so their repos stop being watched below.
+      const live = new Set(Object.values(this.at));
+      for (const k of Object.keys(this.git)) if (!live.has(k)) delete this.git[k], delete this.checked[k], this.unsure.delete(k);
       const used = new Set(Object.values(this.git).filter(Boolean).map((g) => JSON.parse(g.repo)).filter(([on]) => !on).map(([, repo]) => repo));
       for (const repo of this.watching) if (!used.has(repo)) this.watching.delete(repo);
       this.refreshing = false;
@@ -842,6 +841,7 @@ export default class Spaces extends View {
     this.syncTree();
     const t = theme();
     const collapsed = narrow();
+    // Herdr's shared space colors: every mod drawing space avatars reads and fills "space.colors".
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
     const sp = spaces();
     const ids = new Set(sp.map(p => p.id));

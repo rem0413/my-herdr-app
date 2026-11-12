@@ -51,7 +51,8 @@ export default class FileDialog extends View {
     // Sized by content: the overlay is as tall as this; no flex_1 gap between text and buttons.
     return v_flex().id("file-dialog").track_focus(this.handle).w_full().relative().pl(28).pr(28).pt(26).pb(24).bg(t.popover)
       .on_key_down((e, cx) => {
-        if (e.key === "enter") primary(cx); else if (e.key === "escape") this.close(); else return;
+        // A remote delete can't be undone (no Trash there): only a click on Delete does it.
+        if (e.key === "enter") { if (!(del && p.on)) primary(cx); } else if (e.key === "escape") this.close(); else return;
         cx.stop_propagation();
       })
       .child(div().id("fd-x").absolute().top(14).right(14).size(28).flex().items_center().justify_center().rounded(7).cursor_pointer().text_color(t.muted)

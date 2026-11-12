@@ -206,6 +206,8 @@ export default class Files extends View {
       this.pending = new Set(); this.marks = {}; this.watched = null; this.error = null; this.limited = false;
       this.loading = false; this.index = null;
     }
+    // A change or a new place drops the index; an active search rebuilds it at once.
+    this.ensureIndex(cx);
     if (!cwd || this.loading) return;
     const context = this.context;
     this.loading = true;
@@ -272,7 +274,7 @@ export default class Files extends View {
         const files = r.stdout.split("\0").filter(Boolean).slice(0, INDEX_MAX).map(p => p.startsWith("./") ? p.slice(2) : p);
         if (this.context === context) this.index = { key: context.key, at: Date.now(), files, lower: files.map(f => f.toLowerCase()), capped: r.stdout.length >= 7000000 || files.length >= INDEX_MAX };
       } catch (e) { if (this.context === context) this.error = `Search: ${e?.message ?? e}`; }
-      finally { this.indexing = false; this.memo = null; cx.notify(); }
+      finally { this.indexing = false; this.memo = null; if (this.context !== context) this.ensureIndex(cx); cx.notify(); }
     });
   }
 
@@ -460,7 +462,7 @@ export default class Files extends View {
   }
 
   resultRow(rel, t) {
-    const name = base(rel), dir = rel.slice(0, rel.length - name.length - 1), icon = this.icon(rel, false, false);
+    const name = base(rel), dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "", icon = this.icon(rel, false, false);
     const active = this.shown === `${this.root}/${rel}`;
     return h_flex().id(`r-${rel}`).h(ROW).flex_none().px(8).gap(7).items_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover))
       .when(active, el => el.bg(t.selected))
@@ -508,7 +510,7 @@ export default class Files extends View {
       .child(h_flex().h(38).flex_none().pl(12).pr(6).gap(2).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().pr(6).child("Files"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).tooltip(this.root ?? "").child(this.root?.split(/[\\/]/).pop() || "/"))
-        .child(this.headerButton(t, "files-refresh", "refresh-cw.svg", "Refresh", cx => { this.index = null; this.refresh(cx); if (searching) this.ensureIndex(cx); })))
+        .child(this.headerButton(t, "files-refresh", "refresh-cw.svg", "Refresh", cx => { this.index = null; this.refresh(cx); })))
       .child(h_flex().flex_none().px(8).py(6).border_b(1).border_color(t.border)
         .child(Input.new(this.search).flex_1().h(26).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12.5).text_color(t.foreground)))
       .when(Boolean(this.edit), el => el.child(this.editBar(t)))

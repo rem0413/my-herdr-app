@@ -65,7 +65,7 @@ export default class AddSpace extends View {
   }
 
   // ~ shown for the host's home, expanded back before use.
-  tilde(p) { const h = this.homes[key(this.host)]; return h && p?.startsWith(h) ? `~${p.slice(h.length)}` : p ?? ""; }
+  tilde(p) { const h = this.homes[key(this.host)]; return h && (p === h || p?.startsWith(`${h}/`)) ? `~${p.slice(h.length)}` : p ?? ""; }
   expand(p) { const h = this.homes[key(this.host)] ?? "~"; return p === "~" ? h : p.startsWith("~/") ? h + p.slice(1) : p; }
 
   syncLocation() {
@@ -151,8 +151,10 @@ export default class AddSpace extends View {
   }
 
   async free(path) {
+    // Only test's own "no" (exit 1) means free; a failed check must not clone over a folder.
     const r = await exec("test", ["-e", path], { on: this.on() }).catch(() => null);
-    return r?.code !== 0;
+    if (r?.code !== 0 && r?.code !== 1) throw new Error(`Could not check ${this.tilde(path)}: ${r?.stderr?.trim() || "machine not reachable"}`);
+    return r.code === 1;
   }
 
   // The clone runs in the new space's terminal: progress shows, no exec time limit,
@@ -166,7 +168,7 @@ export default class AddSpace extends View {
       try {
         const dir = await this.parent(), dest = `${dir}/${src.name}`;
         if (!(await this.free(dest))) throw new Error(`${this.tilde(dest)} already exists. Use Browse folder to open it.`);
-        const cmd = src.gh ? `gh repo clone ${q(src.gh)} ${q(src.name)}` : `git clone ${q(src.url)} ${q(src.name)}`;
+        const cmd = src.gh ? `gh repo clone ${q(src.gh)} ${q(src.name)}` : `git clone -- ${q(src.url)} ${q(src.name)}`;
         this.close();
         run("space.new", { folder: dir, machine: key(this.host), argv: ["sh", "-c", `${cmd} && cd ${q(src.name)}; exec "\${SHELL:-sh}" -l`] });
       } catch (e) { this.error = String(e?.message ?? e); this.busy = false; cx.notify(); }

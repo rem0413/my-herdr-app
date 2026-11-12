@@ -47,3 +47,9 @@ with tempfile.TemporaryDirectory() as directory:
     path.write_text(json.dumps(records[2]) + '\n')
     assert reader.consume(path, done)['status'] == 'working', 'Truncated file must reset cursor'
 print('OMP reader checks passed')
+
+with tempfile.TemporaryDirectory() as directory:
+    odd = Path(directory) / 'Odd.jsonl'
+    odd.write_text('null\n[1]\n{"type": "message", "message": null}\n{"type": "message", "message": {"role": "user"}}\n')
+    assert reader.consume(odd, None)['status'] == 'working'
+print('omp-reader odd lines ok')

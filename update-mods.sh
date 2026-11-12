@@ -20,13 +20,14 @@ for m in "$@"; do
   [ $DRY = 1 ] && continue
 
   d="$TMP/$m"
-  git clone -q --depth 1 --filter=blob:none --sparse -b "$ref" "$repo" "$d"
-  git -C "$d" sparse-checkout set "$path"
+  { git clone -q --depth 1 --filter=blob:none --sparse -b "$ref" "$repo" "$d" &&
+    git -C "$d" sparse-checkout set "$path"; } || { echo "$m: clone failed, skipped"; continue; }
   [ -f "$d/$path/main.js" ] || { echo "$m: $path/main.js missing upstream, skipped"; continue; }
+  # Check the new version before it replaces the running one.
+  herdr-app check "$d/$path" || { echo "$m: upstream $new fails herdr-app check, kept the old version"; continue; }
   mkdir -p "mods/$m"
   # mod.json first so Herdr never docks a stray copy
   cp "$d/$path/mod.json" "mods/$m/" 2>/dev/null || true
   rsync -a --delete --exclude jsconfig.json --exclude '*.d.ts' "$d/$path/" "mods/$m/"
-  herdr-app check "mods/$m"
   jq --arg m "$m" --arg c "$new" '.[$m].commit = $c' "$SRC" > "$SRC.tmp" && mv "$SRC.tmp" "$SRC"
 done

@@ -19,6 +19,8 @@ def consume(path, previous):
             record = json.loads(line)
         except (ValueError, UnicodeDecodeError):
             continue
+        if not isinstance(record, dict):
+            continue
         kind = record.get('type')
         if kind == 'session':
             state['parentSession'] = record.get('parentSession')
@@ -26,7 +28,9 @@ def consume(path, previous):
             state['role'] = record.get('agent', 'task')
             state['task'] = record.get('task', '')
         elif kind == 'message':
-            message = record.get('message', {})
+            message = record.get('message')
+            if not isinstance(message, dict):
+                continue
             if message.get('role') == 'assistant':
                 stop = message.get('stopReason')
                 state['status'] = 'done' if stop == 'stop' else 'blocked' if stop == 'error' else 'working'
@@ -41,14 +45,17 @@ def discover(addresses):
     for address in addresses:
         if '/' in address:
             continue
-        result = subprocess.run(['hc', 'get', address], capture_output=True, text=True, timeout=10)
-        if result.returncode:
+        # One terminal that can't be read is skipped; it must not hide every other agent's children.
+        try:
+            result = subprocess.run(['hc', 'get', address], capture_output=True, text=True, timeout=10)
+            if result.returncode:
+                continue
+            pid = (json.loads(result.stdout).get('foreground') or {}).get('pid')
+            if not isinstance(pid, int):
+                continue
+            opened = subprocess.run(['/usr/sbin/lsof', '-nP', '-b', '-a', '-p', str(pid), '-Fn'], capture_output=True, text=True, timeout=10)
+        except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired):
             continue
-        terminal = json.loads(result.stdout)
-        pid = (terminal.get('foreground') or {}).get('pid')
-        if not isinstance(pid, int):
-            continue
-        opened = subprocess.run(['/usr/sbin/lsof', '-nP', '-b', '-a', '-p', str(pid), '-Fn'], capture_output=True, text=True, timeout=10)
         for line in opened.stdout.splitlines():
             if not line.startswith('n') or not line.endswith('.jsonl'):
                 continue
@@ -64,7 +71,8 @@ def discover(addresses):
                         header = json.loads(stream.readline())
                 if header.get('type') == 'session' and not header.get('parentSession'):
                     roots[str(path)] = address
-            except OSError:
+            # A session file whose first line isn't written yet is looked at again next time.
+            except (OSError, ValueError, AttributeError):
                 continue
     return roots
 
