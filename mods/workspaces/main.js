@@ -753,8 +753,9 @@ export default class Spaces extends View {
   }
 
   hoverParent(parent, cx, event) {
-    cx.stop_propagation();
+    // Only claim moves while a space is being dragged; otherwise a sidebar resize drag passing over the list must still get them.
     if (this.pressed === null) return;
+    cx.stop_propagation();
     const target = this.tree.entries.find(e => e.id === parent);
     const source = this.tree.entries.find(e => e.id === this.pressed);
     const valid = parent === null || (target && source && target.machine === source.machine && parent !== source.id);
@@ -778,6 +779,7 @@ export default class Spaces extends View {
   }
 
   releaseDrag(r, cx) {
+    if (this.pressed === null) return;
     cx.stop_propagation();
     const id = this.pressed;
     const nesting = this.parentDrop;
