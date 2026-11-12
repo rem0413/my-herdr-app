@@ -48,7 +48,8 @@ export default class AddSpace extends View {
     this.syncLocation();
   }
 
-  close() { closeOverlay(props()?.overlay); }
+  // Not `close`: that name is the View's teardown hook, which Herdr calls itself.
+  dismiss() { closeOverlay(props()?.overlay); }
 
   on() { return this.host ?? undefined; }
 
@@ -97,11 +98,13 @@ export default class AddSpace extends View {
   load(dir, cx) {
     this.loading = true; cx.notify();
     const host = this.host;
+    // Only the newest look lands: an older, slower answer must not replace it.
+    const seq = this.loadSeq = (this.loadSeq ?? 0) + 1;
     cx.spawn(async (cx) => {
       try {
         const target = dir ?? (await this.hostHome());
         const r = await exec("sh", ["-c", LIST, "sh", target], { on: host ?? undefined });
-        if (host !== this.host) return;
+        if (seq !== this.loadSeq || host !== this.host) return;
         if (r.code === 3) throw new Error(`Can't open ${this.tilde(target)}.`);
         if (r.code !== 0) throw new Error((r.stderr || "Couldn't list it").trim());
         const [real, ...names] = r.stdout.split("\n").filter(Boolean);
@@ -110,7 +113,7 @@ export default class AddSpace extends View {
         const rank = (n) => `${n.startsWith(".") ? 1 : 0}${n.toLowerCase()}`;
         this.dirs = names.sort((a, b) => rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : 0);
         this.at = 0; this.filter.set_value(""); this.error = "";
-      } catch (e) { this.error = String(e?.message ?? e); }
+      } catch (e) { if (seq !== this.loadSeq) return; this.error = String(e?.message ?? e); }
       this.loading = false;
       this.scroll.scroll_to_item(0);
       cx.notify();
@@ -134,7 +137,7 @@ export default class AddSpace extends View {
   }
 
   open(folder) {
-    this.close();
+    this.dismiss();
     run("space.new", { folder, machine: key(this.host) });
   }
 
@@ -142,8 +145,11 @@ export default class AddSpace extends View {
 
   async parent() {
     await this.hostHome();
-    const dir = this.expand(this.location.value().trim().replace(/\/+$/, ""));
-    if (!dir) throw new Error("Choose where projects go first.");
+    const typed = this.location.value().trim().replace(/\/+$/, "") || (this.location.value().trim() ? "/" : "");
+    if (!typed) throw new Error("Choose where projects go first.");
+    // A relative path would land wherever the command happens to run.
+    if (!(typed === "~" || typed.startsWith("~/") || typed.startsWith("/"))) throw new Error("Use a full path, starting with / or ~/.");
+    const dir = this.expand(typed);
     const r = await exec("mkdir", ["-p", dir], { on: this.on() }).catch(() => null);
     if (r?.code !== 0) throw new Error(`Can't use ${this.tilde(dir)}: ${(r?.stderr ?? "").trim() || "not writable"}`);
     setShared(LOCATIONS, { ...(shared(LOCATIONS) ?? {}), [key(this.host)]: dir });
@@ -169,7 +175,7 @@ export default class AddSpace extends View {
         const dir = await this.parent(), dest = `${dir}/${src.name}`;
         if (!(await this.free(dest))) throw new Error(`${this.tilde(dest)} already exists. Use Browse folder to open it.`);
         const cmd = src.gh ? `gh repo clone ${q(src.gh)} ${q(src.name)}` : `git clone -- ${q(src.url)} ${q(src.name)}`;
-        this.close();
+        this.dismiss();
         run("space.new", { folder: dir, machine: key(this.host), argv: ["sh", "-c", `${cmd} && cd ${q(src.name)}; exec "\${SHELL:-sh}" -l`] });
       } catch (e) { this.error = String(e?.message ?? e); this.busy = false; cx.notify(); }
     });
@@ -220,7 +226,7 @@ export default class AddSpace extends View {
   closeButton(t) {
     return div().id("as-close").absolute().top(12).right(12).size(22).flex().items_center().justify_center().rounded(6)
       .text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
-      .tooltip("Close (Esc)").on_click(() => this.close()).child(icon("x", 12));
+      .tooltip("Close (Esc)").on_click(() => this.dismiss()).child(icon("x", 12));
   }
 
   input(t, id, state, lead) {
@@ -241,7 +247,7 @@ export default class AddSpace extends View {
   }
 
   footer(t, primary) {
-    return h_flex().pt(4).justify_end().gap(6).child(this.button(t, "as-cancel", "Cancel", () => this.close())).child(primary);
+    return h_flex().pt(4).justify_end().gap(6).child(this.button(t, "as-cancel", "Cancel", () => this.dismiss())).child(primary);
   }
 
   errorLine(t) {
@@ -416,7 +422,7 @@ export default class AddSpace extends View {
       .when(Boolean(this.error), (el) => el.child(this.errorLine(t)))
       .child(h_flex().pt(4).gap(6).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(this.tilde(this.dir) || "…"))
-        .child(this.button(t, "as-cancel", "Cancel", () => this.close()))
+        .child(this.button(t, "as-cancel", "Cancel", () => this.dismiss()))
         .child(this.button(t, "as-select", "Open here", () => this.open(this.dir), { solid: true, enabled: Boolean(this.dir) && !this.loading })));
   }
 
