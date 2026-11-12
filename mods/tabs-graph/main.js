@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, exec, notify } from "herdr";
 import { tabTitle } from "./title.js";
 
 // Editor tabs with unsaved changes ask first (file-dialog); everything else closes as before.
@@ -19,9 +19,26 @@ function find(node, id) {
 }
 
 export default class Tabs extends View {
-  init() {
+  init(_props, cx) {
     this.pressed = null;
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
+    // cmd-t (keys.json "tabs-graph.new"): start the tab where the space's first terminal is now
+    // (what names the space), not the focused pane's cwd. spaces().folder is only where it was made.
+    cx.spawn(async () => {
+      for (;;) {
+        if (await nextCommand() !== "new") continue;
+        const space = spaces().find(p => p.active);
+        const first = panes().find(p => p.tab === space?.tabs[0]?.id && p.terminal);
+        // A root set from the space's menu (workspaces: Root folder…) wins.
+        const root = shared("workspace.roots")?.[space?.id];
+        const folder = root || first?.cwd || space?.folder;
+        // A deleted folder makes tab.new fail; then let Herdr pick (focused pane, else home).
+        const ok = folder && (await exec("test", ["-d", folder], { on: space.machine }).catch(() => null))?.code === 0;
+        run("tab.new", ok ? { folder } : {});
+        // Only a root the person set gets a note, so they know to fix it.
+        if (root && !ok) notify({ title: "Root folder not found", body: `${root} · opened in the current folder. Fix it: right-click the space → Root folder…`, level: "info", timeout: 5000 });
+      }
+    });
   }
 
   // The side panel is remembered per space: switching shows that space's choice

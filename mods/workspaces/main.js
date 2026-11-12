@@ -392,6 +392,7 @@ export default class Spaces extends View {
       ["Tag…", `color:${colorOf(entry)}`, () => { this.menuView = "color"; this.at = 0; }, tagName(colorOf(entry))],
       ["Rename tag…", "square-pen", () => this.editTag(colorOf(entry))],
       ...(menu.space ? [["Rename", "square-pen", () => { closeOverlay(props().overlay); run("space.rename", { id: menu.space }); }]] : []),
+      ...(menu.space ? [["Root folder…", "folder", () => this.editRoot(menu.space), shared("workspace.roots")?.[menu.space] ? base(shared("workspace.roots")[menu.space]) : ""]] : []),
       ...(menu.git ? [["New worktree", "git-branch", worktree("new")], ["Open worktree", "git-branch", worktree("open")]] : []),
       ...(menu.git === "linked" ? [["Remove worktree", "git-branch", worktree("remove")]] : []),
       ...(menu.space ? [["Close", "x", () => { closeOverlay(props().overlay); run("space.close", { id: menu.space }); }]] : []),
@@ -413,8 +414,30 @@ export default class Spaces extends View {
     this.tagInput.focus();
   }
 
+  // Inline edit of where cmd-t (tabs-graph.new) starts new tabs in this space; empty goes back to its first terminal's folder.
+  editRoot(space) {
+    this.menuView = "root";
+    const w = spaces().find((p) => p.id === space);
+    const first = panes().find((p) => p.tab === w?.tabs[0]?.id && p.terminal)?.cwd;
+    this.rootInput = InputState.new({ value: shared("workspace.roots")?.[space] ?? first ?? w?.folder ?? "" });
+    this.rootInput.on("submit", () => {
+      const roots = { ...(shared("workspace.roots") ?? {}) };
+      const path = this.rootInput.value().trim().replace(/\/+$/, "");
+      if (path) roots[space] = path; else delete roots[space];
+      setShared("workspace.roots", roots);
+      closeOverlay(props().overlay);
+    });
+    this.rootInput.focus();
+  }
+
   renderMenu() {
     const t = theme();
+    if (this.menuView === "root") {
+      return v_flex().id("workspace-root").w_full().min_h(0).p(8).gap(6).bg(t.popover).text_size(12)
+        .on_key_down((e) => { if (e.key === "escape") closeOverlay(props().overlay); })
+        .child(div().text_color(t.dim).child("Root folder for new tabs · Enter saves · empty resets"))
+        .child(Input.new(this.rootInput).h(30).px(8).rounded(8).border_1().border_color(t.accent).bg(t.background).text_size(13).text_color(t.foreground));
+    }
     if (this.menuView === "tag") {
       return v_flex().id("workspace-tag").w_full().min_h(0).p(8).gap(6).bg(t.popover).text_size(12)
         .on_key_down((e) => { if (e.key === "escape") closeOverlay(props().overlay); })
