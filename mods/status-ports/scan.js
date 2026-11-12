@@ -6,47 +6,53 @@ import { exec, spaces, panes, terminals, machines } from "herdr";
 export const SHARED_KEY = "ports.scan";     // { rows: Row[], errors: { [machine]: text } }
 export const RESCAN_KEY = "ports.rescan";   // a timestamp: the popup asks for a scan now
 
-// Prints `lsof -F pcn` listener records, then "X<pid>\t<HC_TERMINAL_ID>\t<cwd>" for pids not in "$@".
+// Prints `lsof -F pcn` listener records, then "X<pid>\t<HC_TERMINAL_ID>\t<cwd>" for each process whose
+// "<pid>/<command>" is not in "$@" (a reused pid runs another command, so it is looked up again).
 // HC_TERMINAL_ID comes from /proc (Linux) or `ps -E` (macOS); children inherit it, also after nohup.
-const SCRIPT = `skip=" $* "
+const SCRIPT = `nl='
+'
+skip="$nl$(printf '%s\\n' "$@")$nl"
 out=$(lsof -nP +c 0 -iTCP -sTCP:LISTEN -F pcn 2>/dev/null) || [ -n "$out" ] || command -v lsof >/dev/null || { echo "lsof not found" >&2; exit 2; }
 printf '%s\\n' "$out"
-for p in $(printf '%s\\n' "$out" | sed -n 's/^p//p' | sort -u); do
-  case "$skip" in *" $p "*) continue;; esac
+printf '%s\\n' "$out" | awk '/^p/ { p = substr($0, 2) } /^c/ { print p "\\t" substr($0, 2) }' | sort -u |
+while IFS='	' read -r p cmd; do
+  case "$skip" in *"$nl$p/$cmd$nl"*) continue;; esac
   c=$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
   if [ -r "/proc/$p/environ" ]; then h=$(tr '\\0' '\\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^HC_TERMINAL_ID=//p' | head -1)
   else h=$(ps -E -ww -o command= -p "$p" 2>/dev/null | grep -o 'HC_TERMINAL_ID=[^ ]*' | head -1 | cut -d= -f2); fi
   printf 'X%s\\t%s\\t%s\\n' "$p" "$h" "$c"
 done`;
 
-const info = new Map(); // JSON [machine, pid] -> { terminal, cwd }
+const info = new Map(); // JSON [machine, pid] -> { terminal, cwd, command }
 const k = (on, pid) => JSON.stringify([on, pid]);
 
 function parse(on, text) {
   const rows = new Map();
+  const commands = new Map(); // pid -> command, from the lsof records printed before the X lines
   let pid = 0, command = "";
   for (const line of text.split("\n")) {
     const tag = line[0], value = line.slice(1);
     if (tag === "p") pid = Number(value);
-    else if (tag === "c") command = value;
+    else if (tag === "c") { command = value; if (pid) commands.set(pid, value); }
     else if (tag === "n" && pid) {
       const port = Number(value.slice(value.lastIndexOf(":") + 1));
       if (port && !rows.has(`${pid}:${port}`)) rows.set(`${pid}:${port}`, { machine: on, pid, port, command, address: value.replace(/^\*/, "0.0.0.0") });
     } else if (tag === "X") {
       const [p, terminal, cwd] = value.split("\t");
-      info.set(k(on, Number(p)), { terminal: terminal || null, cwd: cwd || null });
+      info.set(k(on, Number(p)), { terminal: terminal || null, cwd: cwd || null, command: commands.get(Number(p)) ?? "" });
     }
   }
   return [...rows.values()];
 }
 
 async function scanMachine(on) {
-  const cached = [...info.keys()].map(JSON.parse).filter(([m]) => m === on).map(([, p]) => String(p));
+  const cached = [...info].filter(([key]) => JSON.parse(key)[0] === on).map(([key, v]) => `${JSON.parse(key)[1]}/${v.command}`);
   const r = await exec("sh", ["-c", SCRIPT, "ports", ...cached], { on, timeout: 15000 });
   if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
   const rows = parse(on, r.stdout);
-  const live = new Set(rows.map((x) => k(on, x.pid)));
-  for (const key of info.keys()) if (JSON.parse(key)[0] === on && !live.has(key)) info.delete(key);
+  // Drop pids that stopped listening, and any whose command changed (a reused pid) without a fresh X line.
+  const live = new Map(rows.map((x) => [k(on, x.pid), x.command]));
+  for (const [key, v] of info) if (JSON.parse(key)[0] === on && live.get(key) !== v.command) info.delete(key);
   return rows;
 }
 

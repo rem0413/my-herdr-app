@@ -27,11 +27,16 @@ export default class Ports extends View {
 		cx.timer.after(600, () => this.input.focus());
 		this.handle = cx.focus_handle();
 		rescan();
+		// status-ports answers the rescan; a layout without it never does, so stop saying "Scanning…".
+		this.timedOut = false;
+		cx.timer.after(10000, (cx) => { if (!shared(SHARED_KEY)) { this.timedOut = true; cx.notify(); } });
 	}
 
 	kill(row, cx) {
 		cx.spawn(async (cx) => {
-			const r = await exec("kill", [String(row.pid)], { on: row.machine }).catch((e) => ({ code: 1, stderr: String(e) }));
+			// The row can be seconds old: kill only if that pid still listens on the port (a reused pid is someone else).
+			const r = await exec("sh", ["-c", 'lsof -nP -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | grep -qx "$2" || { echo "pid $2 no longer listens on :$1" >&2; exit 3; }; kill "$2"',
+				"ports", String(row.port), String(row.pid)], { on: row.machine, timeout: 15000 }).catch((e) => ({ code: 1, stderr: String(e) }));
 			if (r.code !== 0) notify({ title: `Couldn't kill ${row.command} (${row.pid})`, body: r.stderr.trim(), level: "error" });
 			else {
 				notify({ title: `Killed ${row.command} on :${row.port}${row.machine ? ` (${row.machine})` : ""}`, level: "success", timeout: 3000 });
@@ -203,7 +208,7 @@ export default class Ports extends View {
 						(_e, cx) => { this.externalOpen = !this.externalOpen; cx.notify(); }))
 					.when(externalOpen, (el) => el.children(external.map((row) => this.portRow(row, t, mono, false)))))
 				.when(!shown && !this.error, (el) => el.child(div().p(12).text_color(t.dim)
-					.child(!data ? "Scanning…" : this.ports.length ? "No ports match" : "No listening ports")))))
+					.child(!data ? (this.timedOut ? "No scan result. Ports are scanned by the status-ports bar, which this layout doesn't show." : "Scanning…") : this.ports.length ? "No ports match" : "No listening ports")))))
 			.when(!!this.machineOpen, (el) => el.child(machineMenu));
 	}
 }
