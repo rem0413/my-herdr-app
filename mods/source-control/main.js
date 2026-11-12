@@ -8,21 +8,23 @@ import GitGraph from "./graph.js";
 // repo (superproject + submodules) and branch pickers, stashes. History is the commit graph (graph.js).
 // Diffs open in the shared git-diff preview tab (see mods/git-diff/main.js).
 
-// Mod panes (the diff tab) have no cwd: keep the last terminal's folder instead of jumping to the space folder.
-let last = null;
-function location() {
+// Mod panes (the diff tab) have no cwd: keep the last terminal's folder (per copy) instead of jumping to the space folder.
+function location(self) {
   if (props()?.folder) return { cwd: props().folder, on: props().on ?? null };
   const space = spaces().find((s) => s.active), f = focused();
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   const cwd = pane?.cwd || f?.cwd;
-  if (cwd) return (last = { cwd, on });
-  return last ?? { cwd: space?.folder, on };
+  if (cwd) return (self.last = { cwd, on });
+  return self.last ?? { cwd: space?.folder, on };
 }
-const key = () => JSON.stringify(location());
+const key = (self) => JSON.stringify(location(self));
 // Reads write nothing under .git, so the folder watch doesn't wake itself.
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
 const ICON = "mods/source-control/", SEP = "\x1f", ROW = 26, LIMIT = 2000;
+// Network writes can outlast exec's 30 s default.
+const NET = new Set(["push", "pull", "fetch"]), NET_TIMEOUT = 600000;
+const STATUS = ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"];
 const ADD = () => theme().ansi2 ?? "#3fb950", DEL = () => theme().ansi1 ?? "#f85149";
 const base = (p) => p.replace(/\/+$/, "").split("/").pop() || p;
 
@@ -43,7 +45,7 @@ export default class SourceControl extends View {
     this.filter = InputState.new({ placeholder: "Find or create a branch" });
     this.filter.on("change", (_e, cx) => { this.query = this.filter.value(); cx.notify(); });
     this.filter.on("submit", (_e, cx) => { const first = this.branchItems()[0]; if (first) { this.menu = null; first.pick(cx); } });
-    if (this.tab === "history") this.graph = cx.new(GitGraph);
+    if (this.tab === "history") this.graph = cx.new(GitGraph, { shown: true });
     this.refresh(cx);
     // Only while the window is in front: each refresh is several git runs, remote ones over ssh.
     cx.timer.every(10000, (cx) => { if (window()?.active !== false) this.refresh(cx); });
@@ -53,8 +55,10 @@ export default class SourceControl extends View {
 
   // rediscover: re-read the repo list; force: run even while a load is in flight.
   refresh(cx, { rediscover = false, force = false } = {}) {
-    if ((this.loading || this.busy) && !force) return;
-    const { cwd, on } = location(), context = key();
+    // A change seen while busy refreshes once the current run ends.
+    if ((this.loading || this.busy) && !force) { this.dirty = true; return; }
+    this.dirty = false;
+    const { cwd, on } = location(this), context = key(this);
     if (context !== this.context) {
       this.context = context; this.repo = null; this.repos = []; this.files = []; this.stashes = [];
       this.open = null; this.error = null; this.note = null; this.watched = null; rediscover = true;
@@ -88,19 +92,24 @@ export default class SourceControl extends View {
         await this.load(gen);
         this.watch(this.repo, cx);
       } catch (e) { if (gen === this.gen) this.error = String(e.message ?? e); }
-      finally { if (gen === this.gen) { this.loading = false; cx.notify(); } }
+      finally {
+        if (gen === this.gen) {
+          this.loading = false; cx.notify();
+          if (this.dirty && !this.busy) this.refresh(cx);
+        }
+      }
     });
   }
 
   async load(gen) {
     const repo = this.repo, g = (a) => this.git(a);
     const [status, head, branch, refs, rem, stash, track] = await Promise.all([
-      g(["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]),
+      g(STATUS),
       g(["log", "-1", `--format=%H${SEP}%s`]),
       g(["symbolic-ref", "--short", "-q", "HEAD"]),
       g(["for-each-ref", "--format=%(refname:short)%09%(refname)", "refs/heads", "refs/remotes"]),
       g(["remote"]),
-      g(["stash", "list", `--format=%gd${SEP}%s${SEP}%ct`]),
+      g(["stash", "list", `--format=%gd${SEP}%H${SEP}%s${SEP}%ct`]),
       g(["rev-list", "--left-right", "--count", "HEAD...@{u}"]),
     ]);
     if (status.code !== 0) throw new Error(status.stderr.trim() || "git status failed");
@@ -115,6 +124,7 @@ export default class SourceControl extends View {
     this.files = files; this.limited = all.length > LIMIT;
     // Stage All and Commit act on every change, not only the LIMIT shown.
     this.allState = checkState(all);
+    this.conflicts = all.filter((f) => f.conflict).length;
     this.head = { hash, subject };
     this.branch = branch.code === 0 ? branch.stdout.trim() : hash ? `(detached ${hash.slice(0, 7)})` : "";
     this.detached = branch.code !== 0;
@@ -122,7 +132,7 @@ export default class SourceControl extends View {
       .filter(([, full]) => full && !full.endsWith("/HEAD"))
       .map(([name, full]) => ({ name, remote: full.startsWith("refs/remotes/") }));
     this.remotes = rem.stdout.split("\n").filter(Boolean);
-    this.stashes = stash.stdout.split("\n").filter(Boolean).map((l) => { const [ref, s, time] = l.split(SEP); return { ref, subject: s, time: Number(time) }; });
+    this.stashes = stash.stdout.split("\n").filter(Boolean).map((l) => { const [ref, hash, s, time] = l.split(SEP); return { ref, hash, subject: s, time: Number(time) }; });
     this.upstream = track.code === 0;
     [this.ahead, this.behind] = this.upstream ? track.stdout.trim().split(/\s+/).map(Number) : [0, 0];
     this.error = null;
@@ -137,6 +147,8 @@ export default class SourceControl extends View {
       try {
         while (this.watched === root) {
           await watchFolder(root);
+          // Builds write in bursts: let one settle into a single refresh.
+          await cx.sleep(300);
           if (this.watched === root) this.refresh(cx);
         }
       } catch { if (this.watched === root) this.watched = null; }
@@ -144,6 +156,7 @@ export default class SourceControl extends View {
   }
 
   // Runs git writes in order; stops at the first failure and shows its message.
+  // A step may be an async check (repo, on) => error message or null, run before the writes after it.
   act(label, steps, cx, done = null) {
     if (this.busy || !this.repo) return;
     const repo = this.repo, on = this.on;
@@ -152,7 +165,12 @@ export default class SourceControl extends View {
       let ok = true;
       try {
         for (const args of steps) {
-          const r = await exec("git", args, { cwd: repo, on });
+          if (typeof args === "function") {
+            const error = await args(repo, on);
+            if (error) { ok = false; this.note = error; break; }
+            continue;
+          }
+          const r = await exec("git", args, { cwd: repo, on, ...(NET.has(args[0]) ? { timeout: NET_TIMEOUT } : {}) });
           if (r.code !== 0) { ok = false; this.note = (r.stderr || r.stdout).trim().split("\n").filter(Boolean).slice(-2).join(" "); break; }
         }
       } catch (e) { ok = false; this.note = String(e.message ?? e); }
@@ -170,13 +188,41 @@ export default class SourceControl extends View {
     const paths = files.map((f) => f.path);
     // ponytail: every path goes on one command line; batch it if a huge folder hits ARG_MAX.
     // --literal-pathspecs: a name like "log[1].md" must not also match "log1.md".
-    if (checkState(files) === "all") this.act("Unstaging", [this.head?.hash ? ["--literal-pathspecs", "restore", "--staged", "--", ...paths] : ["--literal-pathspecs", "rm", "--cached", "-r", "-q", "--", ...paths]], cx);
-    else this.act("Staging", [["--literal-pathspecs", "add", "--", ...paths]], cx);
+    // No commit yet: rm --cached needs -f for files edited after staging (it never touches the working tree).
+    if (checkState(files) === "all") this.act("Unstaging", [this.head?.hash ? ["--literal-pathspecs", "restore", "--staged", "--", ...paths] : ["--literal-pathspecs", "rm", "--cached", "-r", "-q", "-f", "--", ...paths]], cx);
+    else {
+      // Staging a conflicted file marks it resolved: only allow that once its conflict markers are gone.
+      const conflicted = files.filter((f) => f.conflict).map((f) => f.path);
+      const check = (repo, on) => this.markersGone(conflicted, repo, on);
+      this.act("Staging", [...(conflicted.length ? [check] : []), ["--literal-pathspecs", "add", "--", ...paths]], cx);
+    }
+  }
+
+  async markersGone(paths, repo, on) {
+    const r = await exec("git", ["--literal-pathspecs", "grep", "-l", "--no-index", "-e", "^<<<<<<< ", "-e", "^>>>>>>> ", "--", ...paths], { cwd: repo, on });
+    if (r.code === 1) return null; // no markers left
+    if (r.code === 0) return `Conflict markers remain in ${r.stdout.trim().split("\n").join(", ")}`;
+    return r.stderr.trim() || "git grep failed";
+  }
+
+  // Commit All stages everything; the panel's status can be seconds old, so look again right before.
+  async nothingStaged(repo, on) {
+    const r = await exec("git", [...READ, ...STATUS], { cwd: repo, on });
+    if (r.code !== 0) return r.stderr.trim() || "git status failed";
+    const now = parseStatus(r.stdout);
+    if (now.some((f) => f.conflict)) return "Resolve conflicted files before committing";
+    return checkState(now) === "none" ? null : "Files were staged meanwhile: check them and commit again";
+  }
+
+  // Pop removes the stash, so make sure its position still names the stash that was shown.
+  async sameStash(s, repo, on) {
+    const r = await exec("git", ["rev-parse", "-q", "--verify", s.ref], { cwd: repo, on });
+    return r.code === 0 && r.stdout.trim() === s.hash ? null : "The stash list changed: refresh and try again";
   }
 
   // The whole repo at once: covers changes past LIMIT and never hits ARG_MAX.
   stageAll(staged, cx) {
-    if (staged) this.act("Unstaging", [this.head?.hash ? ["restore", "--staged", ":/"] : ["rm", "--cached", "-r", "-q", ":/"]], cx);
+    if (staged) this.act("Unstaging", [this.head?.hash ? ["restore", "--staged", ":/"] : ["rm", "--cached", "-r", "-q", "-f", ":/"]], cx);
     else this.act("Staging", [["add", "-A"]], cx);
   }
 
@@ -185,12 +231,14 @@ export default class SourceControl extends View {
   commit(mode, cx) {
     const message = this.message.trim();
     if ((!message && mode !== "amend") || !this.files.length && mode !== "amend") return;
+    if (this.conflicts) { this.note = `Resolve ${this.conflicts} conflicted file${this.conflicts > 1 ? "s" : ""} before committing`; cx.notify(); return; }
     const staged = this.allState !== "none";
     const steps = [];
-    // Nothing staged: commit every change, like the old Changes panel.
-    if (!staged && mode !== "amend") steps.push(["add", "-A"]);
+    // Nothing staged: commit every change, like the old Changes panel, if that still holds.
+    if (!staged && mode !== "amend") steps.push((repo, on) => this.nothingStaged(repo, on), ["add", "-A"]);
     steps.push(mode === "amend" ? ["commit", "--amend", ...(message ? ["-m", message] : ["--no-edit"])] : ["commit", "-m", message]);
-    if (mode === "push" && this.remotes.length) steps.push(this.pushArgs());
+    // Detached HEAD has no branch to push.
+    if (mode === "push" && this.remotes.length && !this.detached) steps.push(this.pushArgs());
     this.act(mode === "amend" ? "Amending" : "Committing", steps, cx, () => { this.message = ""; this.msg.set_value(""); });
   }
 
@@ -206,7 +254,8 @@ export default class SourceControl extends View {
   setTab(tab, cx) {
     this.tab = tab; localStorage.setItem("tab", tab);
     // Created on first use: the graph polls git while it lives.
-    if (tab === "history" && !this.graph) this.graph = cx.new(GitGraph);
+    if (tab === "history" && !this.graph) this.graph = cx.new(GitGraph, { shown: true });
+    else if (this.graph) this.graph.set_props({ shown: tab === "history" });
     cx.notify();
   }
 
@@ -362,8 +411,8 @@ export default class SourceControl extends View {
           .child(div().text_color(t.muted).child(this.icon("stash")))
           .child(div().flex_1().min_w(0).truncate().child(s.subject))
           .child(this.hoverStash === s.ref
-            ? h_flex().gap(2).child(this.button(`sc-sa-${s.ref}`, null, "Apply", (cx) => this.act("Applying stash", [["stash", "apply", s.ref]], cx), t))
-              .child(this.button(`sc-sp-${s.ref}`, null, "Pop", (cx) => this.act("Popping stash", [["stash", "pop", s.ref]], cx), t))
+            ? h_flex().gap(2).child(this.button(`sc-sa-${s.ref}`, null, "Apply", (cx) => this.act("Applying stash", [["stash", "apply", s.hash]], cx), t))
+              .child(this.button(`sc-sp-${s.ref}`, null, "Pop", (cx) => this.act("Popping stash", [(repo, on) => this.sameStash(s, repo, on), ["stash", "pop", s.ref]], cx), t))
             : div().text_size(11).text_color(t.dim).child(ago(s.time)))))))
       .when(empty, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : this.repo ? "No uncommitted changes" : "No folder"))));
   }
@@ -386,7 +435,7 @@ export default class SourceControl extends View {
     const canCommit = Boolean(this.message.trim() && this.files.length && this.repo && !this.busy);
     const staged = this.allState !== "none";
     const commitItems = [
-      { label: "Commit & Push", icon: "push", pick: (cx) => this.commit("push", cx) },
+      ...(this.detached ? [] : [{ label: "Commit & Push", icon: "push", pick: (cx) => this.commit("push", cx) }]),
       { label: "Amend last commit", icon: "undo", pick: (cx) => this.commit("amend", cx) },
     ];
     const trigger = (id, text, bold) => h_flex().id(id).min_w(0).h(24).px(4).gap(3).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
@@ -422,7 +471,7 @@ export default class SourceControl extends View {
   }
 
   render(cx) {
-    if (key() !== this.context) this.refresh(cx);
+    if (key(this) !== this.context) this.refresh(cx);
     const t = theme();
     return v_flex().id("source-control").size_full().min_h(0).overflow_hidden().rounded(10).border_1().border_color(t.border)
       .bg(t.background).text_color(t.foreground).text_size(13)

@@ -4,18 +4,17 @@ import { spaces, panes, focused, exec, theme, settings, props, run, shared, setS
 import { treeRows } from "./git.js";
 
 // Same folder resolution as the shipped Changes panel: the focused pane's repo.
-// Mod panes have no cwd: keep the last terminal's folder instead of jumping to the space folder.
-let last = null;
-function location() {
+// Mod panes have no cwd: keep the last terminal's folder (per copy) instead of jumping to the space folder.
+function location(self) {
   if (props()?.folder) return { cwd: props().folder, on: props().on ?? null };
   const space = spaces().find((s) => s.active), f = focused();
   const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   const cwd = pane?.cwd || f?.cwd;
-  if (cwd) return (last = { cwd, on });
-  return last ?? { cwd: space?.folder, on };
+  if (cwd) return (self.last = { cwd, on });
+  return self.last ?? { cwd: space?.folder, on };
 }
-const key = () => JSON.stringify(location());
+const key = (self) => JSON.stringify(location(self));
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
 const LIMIT = 2000, ROW = 26, LANE = 18, CURVES = 48, ICON = "mods/source-control/";
 const SEP = "\x1f";
@@ -80,7 +79,9 @@ function fmtDate(sec) {
 }
 
 export default class GitGraph extends View {
-  init(_props, cx) {
+  init(props, cx) {
+    // Source Control passes shown: false while its History tab is not in front.
+    this.shown = props?.shown !== false;
     this.commits = []; this.width = 1; this.files = []; this.repos = []; this.branches = []; this.remotes = [];
     this.view = localStorage.getItem("graph.view") ?? "list"; this.collapsed = new Set();
     this.branch = null; this.showRemote = true; this.gen = 0; this.query = ""; this.matches = []; this.match = 0;
@@ -90,15 +91,20 @@ export default class GitGraph extends View {
     this.find.on("change", (_e, cx) => { this.query = this.find.value(); this.computeMatches(); this.jump(0); cx.notify(); });
     this.find.on("submit", (_e, cx) => { this.jump(this.match + 1); cx.notify(); });
     this.refresh(cx);
-    cx.timer.every(15000, (cx) => { if (window()?.active !== false) this.refresh(cx); });
+    cx.timer.every(15000, (cx) => {
+      if (window()?.active === false) return;
+      if (this.shown) this.refresh(cx); else this.stale = true; // refreshed when shown again
+    });
   }
+
+  update(props) { this.shown = props?.shown !== false; }
 
   git(args, repo = this.repo) { return exec("git", [...READ, ...args], { cwd: repo, on: this.on }); }
 
   // rediscover: re-read the repo list (superproject + submodules); force: run even while a load is in flight.
   refresh(cx, { rediscover = false, force = false } = {}) {
     if (this.loading && !force) return;
-    const { cwd, on } = location(), context = key();
+    const { cwd, on } = location(this), context = key(this);
     if (context !== this.context) {
       this.context = context; this.repo = null; this.repos = []; this.commits = []; this.branch = null;
       this.selected = null; this.files = []; this.error = null; rediscover = true;
@@ -236,7 +242,8 @@ export default class GitGraph extends View {
     this.busy = args[0]; this.note = null;
     cx.spawn(async (cx) => {
       try {
-        const r = await exec("git", args, { cwd: this.repo, on: this.on });
+        // Fetch can outlast exec's 30 s default.
+        const r = await exec("git", args, { cwd: this.repo, on: this.on, ...(args[0] === "fetch" ? { timeout: 600000 } : {}) });
         this.note = r.code === 0 ? done : (r.stderr || r.stdout).trim().split("\n").pop();
       } catch (e) { this.note = String(e); }
       this.busy = null;
@@ -450,7 +457,7 @@ export default class GitGraph extends View {
   }
 
   render(cx) {
-    if (key() !== this.context) this.refresh(cx);
+    if (key(this) !== this.context || this.stale) { this.stale = false; this.refresh(cx); }
     const t = theme(), cols = this.layoutCols();
     const list = div().size_full().min_h(0).relative()
       .when(this.commits.length > 0, (e) => e
