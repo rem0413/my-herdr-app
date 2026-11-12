@@ -15,7 +15,8 @@ const local = (address) => !String(address).includes("/");
 // mod.json `settings` (Mod settings, mod.schema.json): when sleeping spaces wake, and what a restart does.
 const DEFAULTS = { wake: "manual", after_restart: "ask" };
 const localReady = () => machines().find((m) => m.name === null)?.layout === "ready";
-const busy = (e) => !e.parent && (e.status === "working" || e.status === "blocked");
+// Any program that isn't an idle agent may hold unsaved work (vim, a build), so it asks first.
+const busy = (e) => !e.parent && (e.kind === "program" || e.status === "working" || e.status === "blocked");
 
 export default class Hibernate extends View {
   init(p, cx) {
@@ -149,7 +150,7 @@ export default class Hibernate extends View {
   // Every local terminal belonging to a space, with sub-agents of those.
   async spaceTerminals(space) {
     const tabs = new Set(space.tabs.map((t) => t.id));
-    const all = (await Promise.all((await list()).filter((t) => local(t.address)).map((t) => get(t.address)))).filter(Boolean);
+    const all = (await Promise.all(((await list()) ?? []).filter((t) => local(t.address)).map((t) => get(t.address)))).filter(Boolean);
     const mine = new Set(all.filter((g) => g.labels?.["herdr.space"] === space.id || tabs.has(g.labels?.["herdr.tab"])).map((g) => g.address));
     for (let grew = true; grew; ) {
       grew = false;
@@ -166,7 +167,7 @@ export default class Hibernate extends View {
     if (!entries.some((e) => !e.parent)) return notify({ title: `Nothing running in ${space.name}`, level: "info" });
     const working = entries.filter(busy);
     if (working.length && !confirmed) {
-      openOverlay({ mod: "hibernate", kind: "dialog", modal: true, width: 440, height: 230 + 22 * working.length, props: { view: "sleep", space: id, name: space.name, busy: working.map((e) => `${e.name} is ${e.status}`) } });
+      openOverlay({ mod: "hibernate", kind: "dialog", modal: true, width: 440, height: 230 + 22 * working.length, props: { view: "sleep", space: id, name: space.name, busy: working.map((e) => `${e.name} is ${e.status ?? "running"}`) } });
       return;
     }
     this.state.sleeping[id] = { at: Date.now(), name: space.name, items: entries };
@@ -187,7 +188,10 @@ export default class Hibernate extends View {
     if (!s) return;
     const tops = s.items.filter((e) => !e.parent);
     const ok = await Promise.all(tops.map(start));
-    delete this.state.sleeping[id];
+    // What didn't restart stays asleep, so it can be woken again.
+    const left = tops.filter((_, i) => !ok[i]);
+    if (left.length) this.state.sleeping[id] = { ...s, items: left };
+    else delete this.state.sleeping[id];
     await this.save();
     this.publish();
     const skipped = tops.filter((_, i) => !ok[i]).map((e) => e.name);
@@ -208,7 +212,9 @@ export default class Hibernate extends View {
       for (const id of Object.keys(this.state.sleeping)) if (!ids.has(id)) delete this.state.sleeping[id], (pruned = true);
       if (pruned) await this.save(), this.publish();
     }
-    const live = (await Promise.all((await list()).filter((t) => local(t.address)).map((t) => get(t.address)))).filter(Boolean);
+    const terminals = await list();
+    if (!terminals) return; // the core is away: keep the last snapshot for when it's back
+    const live = (await Promise.all(terminals.filter((t) => local(t.address)).map((t) => get(t.address)))).filter(Boolean);
     const byAddress = new Map(live.map((g) => [g.address, g]));
     const next = {};
     for (const g of live) {
@@ -222,7 +228,8 @@ export default class Hibernate extends View {
       if (next[o.address]) continue;
       const g = byAddress.get(o.address) ?? (await get(o.address));
       if (g?.state === "live") {
-        if (g.pid !== o.shellPid && idleShell(g)) recovered.push({ ...o, shellPid: g.pid, at: now });
+        // agent-resume restarts the agents it labels; offering them too could type the command twice.
+        if (g.pid !== o.shellPid && idleShell(g) && !g.labels?.["resume.agent"]) recovered.push({ ...o, shellPid: g.pid, at: now });
       } else if (g && !["exited", "killed"].includes(g.reason) && now - (o.lostAt ?? now) < LOST_GRACE) {
         next[o.address] = { ...o, lostAt: o.lostAt ?? now };
       }
@@ -300,7 +307,9 @@ export default class Hibernate extends View {
 
   async resume(items, auto) {
     const ok = await Promise.all(items.map(start));
-    this.state.pending = this.state.pending.filter((p) => !items.some((i) => i.address === p.address));
+    // A manual resume keeps what failed for hibernate.resume; an automatic one would retry it every pass.
+    const failed = auto ? [] : items.filter((_, i) => !ok[i]);
+    this.state.pending = [...this.state.pending.filter((p) => !items.some((i) => i.address === p.address)), ...failed];
     await this.save();
     const n = ok.filter(Boolean).length;
     notify({ title: auto ? "Resumed after restart" : "Resumed", body: `${n} of ${items.length} program${items.length === 1 ? "" : "s"} started again.`, level: n === items.length ? "success" : "warning" });

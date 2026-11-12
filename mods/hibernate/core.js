@@ -15,12 +15,14 @@ export async function get(address) {
   }
 }
 
+// null when the core can't be asked: callers must not read that as "nothing runs".
 export async function list() {
   const r = await hc(["ls", "--json"]).catch(() => null);
+  if (!r || r.code !== 0) return null;
   try {
-    return JSON.parse(r?.stdout ?? "").terminals ?? [];
+    return JSON.parse(r.stdout).terminals ?? [];
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -105,7 +107,7 @@ function kept(argv, k) {
 }
 
 export function resumeArgv(e) {
-  if (e.kind === "claude") return e.session ? ["claude", ...kept(e.argv, "claude"), "--resume", e.session] : e.argv;
+  if (e.kind === "claude") return ["claude", ...kept(e.argv, "claude"), ...(e.session ? ["--resume", e.session] : ["--continue"])];
   if (e.kind === "codex") return ["codex", "resume", "--no-daemon", ...kept(e.argv, "codex"), e.session ?? "--last"];
   if (e.kind === "omp") return ["omp", e.session ? `--resume=${e.session}` : "--continue"];
   return e.argv;
