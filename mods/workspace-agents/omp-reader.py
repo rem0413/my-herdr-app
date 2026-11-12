@@ -105,8 +105,10 @@ def scan(request):
 
 if __name__ == '__main__':
     try:
-        # argv[1]: a file holding the request (it can be large, and argv shows in ps).
-        request = json.loads(Path(sys.argv[1]).read_text())
+        # argv[1]: a file holding the request (it can be large, and argv shows in ps), or the
+        # request itself when run on another machine, where the mod can't write a file.
+        arg = sys.argv[1]
+        request = json.loads(arg if arg.startswith('{') else Path(arg).read_text())
         print(json.dumps(scan(request)))
     except Exception as error:
         print(json.dumps({'error': str(error)}))

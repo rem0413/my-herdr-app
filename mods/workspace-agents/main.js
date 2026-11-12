@@ -5,6 +5,7 @@ import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, knownAgents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
 import { OmpChildren } from "./omp.js";
+import { NativeChildren } from "./native.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -141,6 +142,7 @@ export default class Agents extends View {
     this.migratingPins = new Map(); // address -> when terminal.pin was last asked
     cx.timer.every(30000, (cx) => cx.notify());
     this.omp = new OmpChildren(cx);
+    this.native = new NativeChildren(() => this.share());
     // Program keys of known agents, to list panes running one that never reported.
     this.agentKeys = new Set();
     cx.spawn(async (cx) => {
@@ -184,6 +186,20 @@ export default class Agents extends View {
     this.pendingPins = pending;
     if (pending.length) localStorage.setItem("pins", JSON.stringify(pending));
     else localStorage.removeItem("pins");
+  }
+
+  // In-process children (OMP, Claude Code, Codex) for other mods, such as the Spaces list:
+  // shared "agents.children", written only when it changes.
+  share() {
+    const omp = agents().find((a) => a.app === "omp" || a.program?.key === "omp")?.program ?? null;
+    const children = [
+      ...this.omp.nodes.map(({ transcript, ...n }) => ({ ...n, program: n.program ?? omp })),
+      ...this.native.nodes,
+    ];
+    const signature = JSON.stringify(children.map((n) => [n.address, n.parent, n.name, n.status]));
+    if (signature === this.sharedChildren) return;
+    this.sharedChildren = signature;
+    setShared("agents.children", children);
   }
 
   since(a) {
@@ -291,7 +307,9 @@ export default class Agents extends View {
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     list = [...list, ...unreported(this.listed, this.agentKeys).filter((a) => !asleep[a.space])];
     this.omp.update(list, cx);
-    const all = [...terminals(), ...this.omp.nodes];
+    this.native.update(list, cx);
+    this.share();
+    const all = [...terminals(), ...this.omp.nodes, ...this.native.nodes];
     this.migratePins(all);
     const shown = focused()?.agent;
     const now = Date.now();
@@ -537,11 +555,11 @@ export default class Agents extends View {
             ),
         ),
       )
-      .when(Boolean(this.omp.error) && !collapsed, el => el.child(h_flex().px(12).gap(8).items_center()
-        .child(div().flex_1().text_size(11).text_color(t.blocked).child(this.omp.error))
+      .when(Boolean(this.omp.error ?? this.native.error) && !collapsed, el => el.child(h_flex().px(12).gap(8).items_center()
+        .child(div().flex_1().text_size(11).text_color(t.blocked).child(this.omp.error ?? this.native.error))
         .child(div().id("dismiss-omp-error").px(6).py(4).cursor_pointer().text_color(t.muted)
-          .tooltip("Dismiss OMP discovery error")
-          .on_click((_event, cx) => { this.omp.error = null; cx.notify(); })
+          .tooltip("Dismiss subagent discovery error")
+          .on_click((_event, cx) => { this.omp.error = null; this.native.error = null; cx.notify(); })
           .child("×"))))
       .when(list.length === 0 && !collapsed, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
