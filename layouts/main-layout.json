@@ -158,16 +158,6 @@
               "type": "row",
               "children": [
                 {
-                  "id": "agent-resume",
-                  "type": "block",
-                  "content": {
-                    "mod": "agent-resume"
-                  },
-                  "size": {
-                    "px": 176
-                  }
-                },
-                {
                   "id": "usage",
                   "type": "block",
                   "content": {
@@ -182,6 +172,16 @@
                   "type": "block",
                   "content": {
                     "mod": "status-ports"
+                  }
+                },
+                {
+                  "id": "agent-resume",
+                  "type": "block",
+                  "content": {
+                    "mod": "agent-resume"
+                  },
+                  "size": {
+                    "px": 176
                   }
                 }
               ],

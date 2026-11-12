@@ -309,8 +309,8 @@ export default class Usage extends View {
 
   // Rough width of the bar's limits, to drop the small bars first when short of room.
   barWidth(model, extra, bars) {
-    return model.groups.reduce((w, g) => w + 30 + (bars ? 52 : 0)
-      + g.segments.reduce((a, s) => a + 7 * (s.short.length + s.text.length + (s.reset ? s.reset.length + 1 : 0)) + 22, 0), 90 + extra);
+    return model.groups.reduce((w, g) => w + 24 + (bars ? 38 : 0)
+      + g.segments.reduce((a, s) => a + 7 * (s.short.length + s.text.length + (s.reset ? s.reset.length + 1 : 0)) + 16, 0), 80 + extra);
   }
 
   group(g, showBars, t) {
@@ -318,15 +318,15 @@ export default class Usage extends View {
     const parts = [];
     g.segments.forEach((s, i) => {
       if (i > 0) parts.push(div().text_color(t.dim).child("·"));
-      parts.push(h_flex().gap(4).items_center().flex_none()
+      parts.push(h_flex().gap(3).items_center().flex_none()
         .child(div().whitespace_nowrap().text_color(levelColor(s.level === "ok" ? "ok" : s.level, t)).child(`${s.short} ${s.text}`))
         .when(s.reset !== "", (e) => e.child(div().whitespace_nowrap().text_color(t.dim).child(s.reset))));
     });
     if (!parts.length) parts.push(div().text_color(t.dim).child(g.failed ? "error" : "—"));
-    return h_flex().id(`ul-${g.id}`).gap(8).items_center().flex_none().opacity(g.failed ? 0.55 : 1)
+    return h_flex().id(`ul-${g.id}`).gap(6).items_center().flex_none().opacity(g.failed ? 0.55 : 1)
       .child(image(g.icon).size(14))
-      .when(showBars && first != null, (e) => e.child(bar(44, first.fill, first.level === "ok" ? t.muted : levelColor(first.level, t), t)))
-      .child(h_flex().gap(6).items_center().children(parts));
+      .when(showBars && first != null, (e) => e.child(bar(32, first.fill, first.level === "ok" ? t.muted : levelColor(first.level, t), t)))
+      .child(h_flex().gap(4).items_center().children(parts));
   }
 
   renderBar() {
@@ -337,7 +337,7 @@ export default class Usage extends View {
     const numbers = sessionOnBar(this.session, pr);
     const numbersWidth = numbers.reduce((w, n) => w + 7 * n.text.length + 12, numbers.length ? 16 : 0);
     const showBars = pr.showBars && (!this.width || this.barWidth(model, numbersWidth, true) <= this.width);
-    const content = h_flex().id("ul-content").gap(16).items_center().flex_none()
+    const content = h_flex().id("ul-content").gap(10).items_center().flex_none()
       .on_hover((on, cx) => this.hover(on, cx))
       .child(div().flex_none().text_color(t.dim).child(pr.showRemaining ? "Remaining" : "Used"));
     if (numbers.length) {
@@ -347,13 +347,13 @@ export default class Usage extends View {
     }
     if (model.empty) content.child(svg(icon("gauge")).size(14).text_color(t.dim));
     model.groups.forEach((g) => content.child(this.group(g, showBars, t)));
-    return h_flex().id("root").size_full().px(12).gap(8).items_center().overflow_hidden()
+    // Refresh sits right after the limits, so a narrow block never clips it.
+    return h_flex().id("root").size_full().pl(12).pr(6).gap(4).items_center().overflow_hidden()
       .bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
       .on_size_change((size, cx) => { this.width = size.width; cx.notify(); })
       .child(HoverCard.new("ul-card").anchor("bottom_left").open_delay(350).close_delay(300)
         .trigger(content)
         .content(this.view === "settings" ? this.settings(t) : this.card(t)))
-      .child(div().flex_1())
       .child(this.iconButton("ul-bar-refresh", "refresh", "Refresh now", () => this.ask(), t));
   }
 
