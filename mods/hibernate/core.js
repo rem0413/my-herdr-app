@@ -71,11 +71,18 @@ async function ompSession(pid) {
 }
 
 // A snapshot entry for a terminal, or null when it runs nothing.
-export async function describe(g) {
+// `sessions`: optional Map of "<address>:<pid>" -> session id; a running program keeps
+// its session, so a found id is not looked up again (lsof is not cheap).
+export async function describe(g, sessions = null) {
   const f = program(g);
   if (!f) return null;
   const k = kind(g, f);
-  const session = k === "claude" ? await claudeSession(f.pid) : k === "codex" ? await codexSession(f.pid) : k === "omp" ? await ompSession(f.pid) : null;
+  const cacheKey = `${g.address}:${f.pid}`;
+  let session = sessions?.get(cacheKey) ?? null;
+  if (!session) {
+    session = k === "claude" ? await claudeSession(f.pid) : k === "codex" ? await codexSession(f.pid) : k === "omp" ? await ompSession(f.pid) : null;
+    if (session && sessions) sessions.set(cacheKey, session);
+  }
   return {
     address: g.address,
     shellPid: g.pid,
@@ -117,21 +124,18 @@ const q = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, `
 export const commandLine = (e) => `cd ${q(e.cwd)} && ${resumeArgv(e).map(q).join(" ")}`;
 
 // Starts an entry again in its idle shell; never types into a busy one.
+// Returns true when started, false when it can't start now (busy, no answer),
+// and "gone" when its terminal exited or was killed: that is not resumed.
 export async function start(e) {
   const g = await get(e.address);
-  let address = e.address;
-  if (!g || g.state !== "live") {
-    if (!e.space || !e.tab) return false;
-    // Its terminal is gone: a new shell in the same tab.
-    const r = await hc(["run", "--json", "--bg", "--keep", "--no-parent", "--cwd", e.cwd, "--label", `herdr.space=${e.space}`, "--label", `herdr.tab=${e.tab}`]).catch(() => null);
-    try {
-      address = JSON.parse(r?.stdout ?? "").address;
-    } catch {
-      return false;
-    }
-    if (!address) return false;
-  } else if (!idleShell(g)) return false;
-  const r = await hc(["send", address, commandLine(e)]).catch(() => null);
+  if (!g) {
+    // No answer from the core is not "gone": only a listing without the address is.
+    const all = await list();
+    return all && !all.some((t) => t.address === e.address) ? "gone" : false;
+  }
+  if (g.state !== "live") return "gone";
+  if (!idleShell(g)) return false;
+  const r = await hc(["send", e.address, commandLine(e)]).catch(() => null);
   return r?.code === 0;
 }
 
@@ -165,6 +169,9 @@ export async function stop(cx, e) {
   if (await waitIdle(cx, e.address, 5000)) return true;
   const g = await get(e.address);
   const f = program(g);
-  if (f && f.pid !== g.pid) await exec("kill", ["-KILL", `-${f.pid}`]).catch(() => null);
+  if (f && f.pid !== g.pid) {
+    const r = await exec("kill", ["-KILL", `-${f.pid}`]).catch(() => null);
+    if (r?.code !== 0) await exec("kill", ["-KILL", String(f.pid)]).catch(() => null);
+  }
   return waitIdle(cx, e.address, 3000);
 }

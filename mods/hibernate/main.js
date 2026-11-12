@@ -4,7 +4,7 @@
 import { View, div } from "gpui-kit";
 import { spaces, machines, shared, setShared, notify, openOverlay, closeOverlay, appHome, props, focused, nextCommand, exec, readTextFile, writeTextFile } from "herdr";
 import * as fs from "fs/promises";
-import { get, list, describe, idleShell, start, stop, commandLine } from "./core.js";
+import { get, list, describe, idleShell, program, start, stop, commandLine } from "./core.js";
 import { SleepDialog, ResumeDialog } from "./ui.js";
 import { loadSettings } from "./settings.js";
 
@@ -29,6 +29,7 @@ export default class Hibernate extends View {
     this.queue = [];
     this.running = false;
     this.offered = new Set();
+    this.sessions = new Map(); // "<address>:<pid>" -> agent session id, see describe()
     // Requests already in shared.json were handled by an earlier run.
     this.seen = shared("hibernate.request")?.nonce ?? null;
     this.seenAnswer = shared("hibernate.answer")?.nonce ?? null;
@@ -40,8 +41,11 @@ export default class Hibernate extends View {
       this.publish();
       await this.noteLaunch();
       await this.pass(cx);
+      cx.notify(); // render reads requests, focus and wakeAll (see poll)
     });
-    cx.timer.every(500, (cx) => this.poll(cx));
+    // poll runs on every render (focus, spaces, machines and shared state redraw it);
+    // this slow timer only catches what changed without a redraw.
+    cx.timer.every(5000, (cx) => this.poll(cx));
     cx.timer.every(30000, (cx) => this.enqueue(cx, (cx) => this.pass(cx)));
     // keys.json: "hibernate.sleep" / "hibernate.wake" (focused space), "hibernate.sleep:<space id>",
     // or "hibernate.resume" (everything waiting after a restart).
@@ -127,18 +131,31 @@ export default class Hibernate extends View {
   }
 
   async load() {
-    const text = await fs.readFile(FILE(), "utf8").catch(() => null);
+    const text = await readTextFile(FILE()).catch(() => null);
+    // What is on disk now: save() replaces exactly this, atomically.
+    this.disk = text;
     try {
       if (text) this.state = { ...this.state, ...JSON.parse(text) };
       delete this.state.autoResume; // now the after_restart setting
     } catch (e) {
-      console.log(`hibernate: unreadable state.json (${e})`);
+      // Kept aside, so the next save can't overwrite what sleeping spaces were running.
+      const aside = `${FILE()}.corrupt-${Date.now()}`;
+      await writeTextFile(aside, text, null).catch((err) => console.log(`hibernate: couldn't keep ${aside} (${err})`));
+      console.log(`hibernate: unreadable state.json (${e}), kept as ${aside}`);
     }
   }
 
   async save() {
     await fs.mkdir(DIR(), { recursive: true }).catch(() => {});
-    await fs.writeFile(FILE(), JSON.stringify(this.state, null, 1));
+    const text = JSON.stringify(this.state, null, 1);
+    if (this.disk === undefined) this.disk = await readTextFile(FILE()).catch(() => null);
+    try {
+      await writeTextFile(FILE(), text, this.disk);
+    } catch {
+      // Changed on disk since we read it (another copy, an editor): this run's state wins.
+      await writeTextFile(FILE(), text, await readTextFile(FILE()).catch(() => null));
+    }
+    this.disk = text;
   }
 
   publish() {
@@ -163,7 +180,7 @@ export default class Hibernate extends View {
     const space = spaces().find((s) => s.id === id);
     if (!space || space.machine || !local(id)) return notify({ title: "Sleep works on this Mac's spaces only", level: "warning" });
     if (this.state.sleeping[id]) return;
-    const entries = (await Promise.all((await this.spaceTerminals(space)).map(describe))).filter(Boolean);
+    const entries = (await Promise.all((await this.spaceTerminals(space)).map((g) => describe(g, this.sessions)))).filter(Boolean);
     if (!entries.some((e) => !e.parent)) return notify({ title: `Nothing running in ${space.name}`, level: "info" });
     const working = entries.filter(busy);
     if (working.length && !confirmed) {
@@ -188,16 +205,16 @@ export default class Hibernate extends View {
     if (!s) return;
     const tops = s.items.filter((e) => !e.parent);
     const ok = await Promise.all(tops.map(start));
-    // What didn't restart stays asleep, so it can be woken again.
+    // What didn't restart stays asleep, so it can be woken again; a closed terminal is dropped.
     const left = tops.filter((_, i) => !ok[i]);
     if (left.length) this.state.sleeping[id] = { ...s, items: left };
     else delete this.state.sleeping[id];
     await this.save();
     this.publish();
-    const skipped = tops.filter((_, i) => !ok[i]).map((e) => e.name);
+    const skipped = tops.filter((_, i) => ok[i] !== true).map((e) => e.name);
     notify(
       skipped.length
-        ? { title: `${s.name} is awake`, body: `Not restarted (busy or gone): ${skipped.join(", ")}`, level: "warning" }
+        ? { title: `${s.name} is awake`, body: `Not restarted (busy or closed): ${skipped.join(", ")}`, level: "warning" }
         : { title: `${s.name} is awake`, body: `${tops.length} program${tops.length === 1 ? "" : "s"} resumed.`, level: "success" },
     );
   }
@@ -217,9 +234,11 @@ export default class Hibernate extends View {
     const live = (await Promise.all(terminals.filter((t) => local(t.address)).map((t) => get(t.address)))).filter(Boolean);
     const byAddress = new Map(live.map((g) => [g.address, g]));
     const next = {};
+    const running = new Set(live.map((g) => `${g.address}:${program(g)?.pid}`));
+    for (const k of this.sessions.keys()) if (!running.has(k)) this.sessions.delete(k);
     for (const g of live) {
       if (g.parent || !g.labels?.["herdr.space"]) continue;
-      const e = await describe(g);
+      const e = await describe(g, this.sessions);
       if (e) next[e.address] = { ...e, status: null };
     }
     const now = Date.now();
@@ -268,10 +287,13 @@ export default class Hibernate extends View {
       this.state.pending = [];
       return this.save();
     }
-    const items = await this.stillPending();
+    let items = await this.stillPending();
     if (this.settings.after_restart === "auto") {
-      if (items.length) await this.resume(items, true);
-      return;
+      // Only agents resume by themselves: a plain program (a deploy, a migration) is
+      // offered like with "ask", so nothing reruns without a look.
+      const agents = items.filter((p) => p.kind !== "program");
+      if (agents.length) await this.resume(agents, true);
+      items = items.filter((p) => p.kind === "program");
     }
     const key = items.map((p) => `${p.address}:${p.shellPid}`).sort().join(",");
     if (!items.length || this.offered.has(key)) return;
@@ -311,13 +333,14 @@ export default class Hibernate extends View {
     const failed = auto ? [] : items.filter((_, i) => !ok[i]);
     this.state.pending = [...this.state.pending.filter((p) => !items.some((i) => i.address === p.address)), ...failed];
     await this.save();
-    const n = ok.filter(Boolean).length;
+    const n = ok.filter((v) => v === true).length;
     notify({ title: auto ? "Resumed after restart" : "Resumed", body: `${n} of ${items.length} program${items.length === 1 ? "" : "s"} started again.`, level: n === items.length ? "success" : "warning" });
   }
 
   render(cx) {
     if (this.view === "sleep") return SleepDialog.render(this, cx);
     if (this.view === "resume") return ResumeDialog.render(this, cx);
+    this.poll(cx);
     return div().id("hibernate").size_full();
   }
 }
