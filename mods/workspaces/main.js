@@ -572,6 +572,10 @@ export default class Spaces extends View {
       const status = all.filter((a) => a.tab === tab.id).reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
       const lit = tab.id === shownTab;
       const prog = lead?.mod ? null : lead?.program?.name;
+      // Like the agents list: the program's own title when it tells something (not a path, host or its name).
+      const live = (lead?.title ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
+      const telling = live && live !== prog && !/^[~/]|^[A-Za-z]:\\/.test(live) && !live.includes("@") && live.toLowerCase() !== lead?.program?.key;
+      const detail = lead?.mod ? null : telling ? live : prog;
       return h_flex()
         .id(`tab-${tab.id}`)
         .h(26)
@@ -588,7 +592,7 @@ export default class Spaces extends View {
         .child(rail(t, i === tabs.length - 1))
         .child(progIcon(lead?.program, 14, t.dim))
         .child(div().flex_shrink(0).max_w(130).truncate().text_size(12.5).text_color(lit ? t.foreground : t.muted).child(tab.name))
-        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(prog && prog !== tab.name ? prog : ""))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(detail && detail !== tab.name ? detail : ""))
         .when(Boolean(status), (el) => el.child(statusMark(t, status)));
     });
   }
