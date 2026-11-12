@@ -103,6 +103,9 @@ export default class Usage extends View {
       this.history = H.parse(this.historyText);
       const r = await exec("sh", [helper("session.sh"), "plan"]).catch(() => null);
       this.claudePlan = r?.code === 0 ? r.stdout.trim() : null;
+      // Claude's config folder, as the helpers find it (CLAUDE_CONFIG_DIR, else ~/.claude).
+      const d = await exec("sh", ["-c", 'printf %s "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"']).catch(() => null);
+      this.claudeDir = (d?.code === 0 && d.stdout.trim()) || `${home()}/.claude`;
       this.refreshAll(cx);
     });
     cx.timer.every(60 * 1000, (cx) => this.tick(cx));
@@ -228,6 +231,8 @@ export default class Usage extends View {
   }
 
   async loadSession(terminal) {
+    // A terminal on another machine ("<machine>/t7"): its pid means nothing to this computer's helpers and files.
+    if (terminal.includes("/")) return null;
     const info = JSON.parse((await exec("hc", ["get", terminal])).stdout);
     const app = AGENTS[info.status?.app];
     const pid = info.foreground?.pid;
@@ -240,7 +245,7 @@ export default class Usage extends View {
       return { app, title: folder, model: kv.model || null, tokens: Number(kv.tokens) || 0,
         window: Number(kv.window) || null, calls: Number(kv.calls), compactions: null };
     }
-    const meta = JSON.parse((await readTextFile(`${home()}/.claude/sessions/${pid}.json`)) ?? "null");
+    const meta = JSON.parse((await readTextFile(`${this.claudeDir ?? `${home()}/.claude`}/sessions/${pid}.json`)) ?? "null");
     const sid = meta?.sessionId;
     if (!sid || !/^[0-9A-Za-z-]+$/.test(sid)) return null;
     const doc = JSON.parse((await readTextFile(`${dataDir()}/sessions/${sid}.json`)) ?? "null");
