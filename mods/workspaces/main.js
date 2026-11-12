@@ -147,19 +147,22 @@ export default class Spaces extends View {
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // `git status` walks the whole tree, on another machine a process there:
-    // only when its answer could have changed (see `due`).
-    cx.timer.every(250, (cx) => this.checkNew(cx));
+    // only when its answer could have changed (see `due`). Every render looks too
+    // (spaces, panes and agents redraw it); this timer catches the fallback and new spaces.
+    cx.timer.every(1000, (cx) => this.checkNew(cx, true));
   }
 
-  checkNew(cx) {
+  // `notify`: false from render, which must not ask for another render.
+  checkNew(cx, notify) {
     const now = Date.now();
     const sp = spaces();
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
     const ps = panes();
     const due = this.due(now, sp, ps);
     if (due.size) this.refreshGit(due, cx);
-    this.pr.refresh(sp.map((s) => ({ machine: s.machine ?? null, folder: place(s, ps), branch: this.git[where(s, ps)]?.branch ?? null })), cx);
-    if (sp.some((s) => !this.shown.has(s.id))) cx.notify();
+    // GitHub is asked only while the window is in front, like the git fallback.
+    if (window()?.active) this.pr.refresh(sp.map((s) => ({ machine: s.machine ?? null, folder: place(s, ps), branch: this.git[where(s, ps)]?.branch ?? null })), cx);
+    if (notify && sp.some((s) => !this.shown.has(s.id))) cx.notify();
   }
 
   // Places whose git could have changed: new ones (a new space, a cd), where a
@@ -187,7 +190,7 @@ export default class Spaces extends View {
       if (ready && this.ready[m.name] === false) for (const k of keys) if (JSON.parse(k)[0] === m.name) due.add(k);
       this.ready[m.name] = ready;
     }
-    if (window().active) {
+    if (window()?.active) {
       for (const k of keys) {
         const asks = this.git[k] || this.unsure.has(k);
         if (asks && !this.folded.has(JSON.parse(k)[0]) && now - (this.checked[k] ?? 0) > FALLBACK) due.add(k);
@@ -296,6 +299,12 @@ export default class Spaces extends View {
       const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
       const common = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on });
       const repo = common.stdout.trim();
+      // A git too old for --path-format (before 2.31), or a failed look: no repo to name or watch.
+      if (top.code !== 0 || common.code !== 0 || !repo) {
+        this.unsure.add(key);
+        this.git[key] ??= null;
+        return;
+      }
       const name = repo.endsWith("/.git") ? base(repo.slice(0, -5)) : base(repo).replace(/\.git$/, "");
       const info = { name, branch: null, ahead: 0, behind: 0, repo: JSON.stringify([on, repo]), linked: repo !== `${top.stdout.trim()}/.git` };
       for (const line of r.stdout.split("\n")) {
@@ -758,6 +767,7 @@ export default class Spaces extends View {
       const moved = next.entries.find(e => e.id === id);
       next.entries = next.entries.filter(e => e.id !== id);
       const at = next.entries.findIndex(e => e.id === r.entry.id);
+      if (at < 0) return cx.notify();
       next.entries.splice(at + (after || nesting ? 1 : 0), 0, moved);
       if (nesting) next.entries = next.entries.map(e => e.id === parent ? { ...e, folded: false } : e);
       setShared("workspace.tree", next);
@@ -836,8 +846,9 @@ export default class Spaces extends View {
         .child(item("tag-filter-all", !this.tagFilter, all, "All Tags…", null)));
   }
 
-  render() {
+  render(cx) {
     if (props()?.menu) return this.renderMenu();
+    this.checkNew(cx, false);
     this.syncTree();
     const t = theme();
     const collapsed = narrow();
