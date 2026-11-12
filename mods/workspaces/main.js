@@ -627,8 +627,12 @@ export default class Spaces extends View {
         .on_click(() => { run("space.select", { id: w.id }); run("tab.select", { id: tab.id }); })
         .child(rail(t, last))
         .child(progIcon(lead?.program, 14, t.dim))
-        .child(div().flex_shrink(0).max_w(130).truncate().text_size(12).text_color(lit ? t.foreground : t.muted).child(tab.name))
-        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(detail && detail !== tab.name ? detail : ""))
+        // An unnamed tab is titled by what runs in it, not its position number.
+        .when(tab.named || !detail, (el) => el
+          .child(div().flex_shrink(0).max_w(130).truncate().text_size(12).text_color(lit ? t.foreground : t.muted).child(tab.name))
+          .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(detail && detail !== tab.name ? detail : "")))
+        .when(!tab.named && Boolean(detail), (el) => el
+          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(lit ? t.foreground : t.muted).child(detail)))
         .when(Boolean(status), (el) => el.child(statusMark(t, status))),
       ...subs.map((s) => this.subRow(s, t, depth, last))];
     });
