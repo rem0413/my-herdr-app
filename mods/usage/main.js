@@ -17,7 +17,7 @@ import {
   readTextFile, writeTextFile, watchFolder, closeOverlay, run,
 } from "herdr";
 import { claudeLimits, codexLimits } from "./lib/limits.js";
-import { report, RANGES, PROVIDERS } from "./lib/rollup.js";
+import { report, RANGES, PROVIDERS, hitRate } from "./lib/rollup.js";
 import { barModel, cardModel, sessionView, sessionOnBar } from "./lib/view.js";
 import * as P from "./lib/prefs.js";
 import * as fmt from "./lib/format.js";
@@ -676,16 +676,26 @@ export default class Usage extends View {
   }
 
   table(title, rows, total, t) {
+    // IN is uncached input; CACHE is cache reads plus writes; HIT is cache reads over all prompt tokens.
+    const num = (w, text) => div().w(w).flex_none().flex().justify_end().text_color(t.muted).child(text);
     return v_flex().gap(8)
       .child(h_flex().text_size(10).font_semibold().text_color(t.dim)
         .child(div().flex_1().child(title.toUpperCase()))
+        .child(div().w(48).flex().justify_end().child("IN"))
+        .child(div().w(52).flex().justify_end().child("CACHE"))
+        .child(div().w(48).flex().justify_end().child("OUT"))
+        .child(div().w(40).flex().justify_end().child("HIT"))
         .child(div().w(60).flex().justify_end().child("TOKENS"))
         .child(div().w(64).flex().justify_end().child("COST")))
       .children(rows.map((r) => v_flex().id(`row-${title}-${r.name}`).gap(4)
         .tooltip(`${r.requests} requests · ${r.sessions} sessions · in ${fmt.tokens(r.input)} · out ${fmt.tokens(r.output)} · cache read ${fmt.tokens(r.cacheRead)} · cache write ${fmt.tokens(r.cacheWrite)}`)
         .child(h_flex().items_center()
           .child(div().flex_1().min_w(0).truncate().child(r.name))
-          .child(div().w(60).flex_none().flex().justify_end().text_color(t.muted).child(fmt.tokens(r.tokens)))
+          .child(num(48, fmt.tokens(r.input)))
+          .child(num(52, fmt.tokens(r.cacheRead + r.cacheWrite)))
+          .child(num(48, fmt.tokens(r.output)))
+          .child(num(40, fmt.percent(hitRate(r) == null ? null : hitRate(r) * 100)))
+          .child(num(60, fmt.tokens(r.tokens)))
           .child(div().w(64).flex_none().flex().justify_end().font_semibold().child(this.costText(r))))
         .child(this.meter(total ? r.tokens / total : 0, t.input, t, 2))));
   }
@@ -773,7 +783,7 @@ export default class Usage extends View {
     if (range?.total.requests) {
       breakdown
         .child(div().text_size(10).text_color(t.dim)
-          .child(`${range.total.requests} requests · ${range.total.sessions} sessions · in ${fmt.tokens(range.total.input)} · out ${fmt.tokens(range.total.output)} · cache read ${fmt.tokens(range.total.cacheRead)} · write ${fmt.tokens(range.total.cacheWrite)}`))
+          .child(`${range.total.requests} requests · ${range.total.sessions} sessions · in ${fmt.tokens(range.total.input)} · out ${fmt.tokens(range.total.output)} · cache read ${fmt.tokens(range.total.cacheRead)} · write ${fmt.tokens(range.total.cacheWrite)} · cache hit ${fmt.percent(hitRate(range.total) == null ? null : hitRate(range.total) * 100)}`))
         .child(this.table("Models", range.models, range.total.tokens, t))
         .child(this.table("Agents", range.agents, range.total.tokens, t));
     } else {

@@ -95,6 +95,12 @@ export function parseRows(text) {
 
 export const tokens = (t) => t.input + t.output + t.cacheRead + t.cacheWrite + (t.cacheWrite1h ?? 0);
 
+// Share of prompt tokens served from cache (0..1), or null with no prompt tokens.
+export function hitRate(b) {
+  const prompt = b.input + b.cacheRead + b.cacheWrite + (b.cacheWrite1h ?? 0);
+  return prompt ? b.cacheRead / prompt : null;
+}
+
 function bucket(name) {
   return { name, requests: 0, sessions: new Set(), input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, unpriced: 0 };
 }

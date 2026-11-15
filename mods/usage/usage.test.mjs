@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { priceFor, costOf, parseRows, rollup, report } from "./lib/rollup.js";
+import { priceFor, costOf, parseRows, rollup, report, hitRate } from "./lib/rollup.js";
 import { claudeLimits, codexLimits, current, level } from "./lib/limits.js";
 import * as fmt from "./lib/format.js";
 import * as P from "./lib/prefs.js";
@@ -92,6 +92,11 @@ await test("rollup filters by range and groups tokens, sessions and cost per mod
   close(codex7.total.cost, 10);
   assert.equal(rep.ranges["30d"][0].total.requests, 3);
   assert.equal(rollup([], 0, pricing)[1].total.tokens, 0);
+});
+
+await test("hitRate is cache reads over every prompt token", () => {
+  assert.equal(hitRate({ input: 10, output: 999, cacheRead: 80, cacheWrite: 5, cacheWrite1h: 5 }), 0.8);
+  assert.equal(hitRate({ input: 0, output: 5, cacheRead: 0, cacheWrite: 0 }), null);
 });
 
 await test("claudeLimits reads the statusLine payload and tolerates schema drift", () => {
