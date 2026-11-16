@@ -16,8 +16,26 @@ function source(text) {
   if (m) return { gh: `${m[1]}/${m[2]}`, name: m[2] };
   return { url: t, name: t.split(/[/:]/).pop()?.replace(/\.git$/, "") ?? "" };
 }
-// Lists a folder's subfolders on the host: first line its real path, then one name per line.
-const LIST = 'cd -- "$1" 2>/dev/null || exit 3; pwd; for f in .* *; do [ "$f" = . ] || [ "$f" = .. ] || { [ -d "$f" ] && printf "%s\\n" "$f"; }; done; exit 0';
+// Lists a folder's subfolders on the host in one round trip: first line the host's home,
+// then the folder's real path, then one name per line. No folder given: the home.
+const LIST = 'printf "%s\\n" "$HOME"; cd -- "${1:-$HOME}" 2>/dev/null || exit 3; pwd; for f in .* *; do [ "$f" = . ] || [ "$f" = .. ] || { [ -d "$f" ] && printf "%s\\n" "$f"; }; done; exit 0';
+// The level below a folder, for prefetch: "D\t<child>" per readable subfolder, then
+// "S\t<child>\t<name>" per folder inside it. One round trip; run after the listing shows.
+const NEXT = 'cd -- "$1" 2>/dev/null || exit 3; for f in .* *; do [ "$f" = . ] || [ "$f" = .. ] || [ ! -d "$f" ] || [ ! -r "$f" ] || [ ! -x "$f" ] || { printf "D\\t%s\\n" "$f"; for g in "$f"/.* "$f"/*; do b=${g##*/}; [ "$b" = . ] || [ "$b" = .. ] || [ ! -d "$g" ] || printf "S\\t%s\\t%s\\n" "$f" "$b"; done; }; done; exit 0';
+// A prefetch slower than this is dropped: some trees (/, network mounts) take minutes.
+const NEXT_TIMEOUT = 4000;
+const rank = (n) => `${n.startsWith(".") ? 1 : 0}${n.toLowerCase()}`;
+// Regular folders first, hidden ones after; each alphabetical.
+const sorted = (names) => names.sort((a, b) => rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : 0);
+// Listings seen, "<host>\n<folder>" -> { real, dirs }: a folder seen before shows at once while
+// it is asked again. Module-wide, so reopening the dialog is instant too; capped, oldest out.
+const LISTINGS = new Map();
+const LISTINGS_MAX = 200;
+function remember(k, value) {
+  LISTINGS.delete(k);
+  LISTINGS.set(k, value);
+  if (LISTINGS.size > LISTINGS_MAX) LISTINGS.delete(LISTINGS.keys().next().value);
+}
 
 const ACTIONS = [
   { id: "browse", icon: "folder", title: "Browse folder", hint: "Existing Git repository or folder on this host" },
@@ -96,28 +114,66 @@ export default class AddSpace extends View {
   // ---- browse ----
 
   load(dir, cx) {
-    this.loading = true; cx.notify();
     const host = this.host;
+    const k = (d) => `${key(host)}\n${d ?? "~"}`;
     // Only the newest look lands: an older, slower answer must not replace it.
     const seq = this.loadSeq = (this.loadSeq ?? 0) + 1;
+    const seen = LISTINGS.get(k(dir));
+    if (seen) this.show(seen, true);
+    this.loading = !seen; cx.notify();
     cx.spawn(async (cx) => {
       try {
-        const target = dir ?? (await this.hostHome());
-        const r = await exec("sh", ["-c", LIST, "sh", target], { on: host ?? undefined });
+        const r = await exec("sh", ["-c", LIST, "sh", dir ?? ""], { on: host ?? undefined });
         if (seq !== this.loadSeq || host !== this.host) return;
-        if (r.code === 3) throw new Error(`Can't open ${this.tilde(target)}.`);
+        const [hostHome, ...rest] = r.stdout.split("\n");
+        if (hostHome) this.homes[key(host)] = hostHome;
+        if (r.code === 3) throw new Error(`Can't open ${this.tilde(dir)}.`);
         if (r.code !== 0) throw new Error((r.stderr || "Couldn't list it").trim());
-        const [real, ...names] = r.stdout.split("\n").filter(Boolean);
-        this.dir = real;
-        // Regular folders first, hidden ones after; each alphabetical.
-        const rank = (n) => `${n.startsWith(".") ? 1 : 0}${n.toLowerCase()}`;
-        this.dirs = names.sort((a, b) => rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : 0);
-        this.at = 0; this.filter.set_value(""); this.error = "";
-      } catch (e) { if (seq !== this.loadSeq) return; this.error = String(e?.message ?? e); }
+        const [real, ...names] = rest.filter(Boolean);
+        const listing = { real, dirs: sorted(names) };
+        remember(k(dir), listing);
+        remember(k(real), listing);
+        // The same as what is shown: leave the filter and selection alone.
+        if (!seen || JSON.stringify(seen) !== JSON.stringify(listing)) this.show(listing, !seen);
+        this.error = "";
+        this.prefetch(host, listing, cx);
+      } catch (e) {
+        if (seq !== this.loadSeq) return;
+        this.error = String(e?.message ?? e);
+        LISTINGS.delete(k(dir));
+      }
       this.loading = false;
-      this.scroll.scroll_to_item(0);
       cx.notify();
     });
+  }
+
+  // Lists the level below `listing` in the background, so opening a subfolder shows at once.
+  // Only subfolders not seen yet; skipped at / (slow system trees).
+  prefetch(host, { real, dirs }, cx) {
+    const join = (name) => (real === "/" ? `/${name}` : `${real}/${name}`);
+    const k = (d) => `${key(host)}\n${d}`;
+    if (real === "/" || !dirs.some((d) => !LISTINGS.has(k(join(d))))) return;
+    cx.spawn(async () => {
+      const r = await exec("sh", ["-c", NEXT, "sh", real], { on: host ?? undefined, timeout: NEXT_TIMEOUT }).catch(() => null);
+      if (r?.code !== 0) return;
+      const below = new Map();
+      for (const line of r.stdout.split("\n")) {
+        const [kind, child, name] = line.split("\t");
+        if (kind === "D" && child) below.set(child, below.get(child) ?? []);
+        else if (kind === "S" && child && name) (below.get(child) ?? below.set(child, []).get(child)).push(name);
+      }
+      for (const [child, names] of below) if (!LISTINGS.has(k(join(child)))) remember(k(join(child)), { real: join(child), dirs: sorted(names) });
+    });
+  }
+
+  // `fresh`: a folder just opened (reset filter, selection and scroll), else a quiet refresh.
+  show({ real, dirs }, fresh) {
+    this.dir = real;
+    this.dirs = dirs;
+    if (fresh) {
+      this.at = 0; this.filter.set_value(""); this.error = "";
+      this.scroll.scroll_to_item(0);
+    } else this.at = Math.min(this.at, Math.max(0, this.shown().length - 1));
   }
 
   join(name) { return this.dir === "/" ? `/${name}` : `${this.dir}/${name}`; }
