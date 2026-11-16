@@ -10,26 +10,44 @@
 // bmp, ico, tif) show with Fit/zoom; PDFs one page at a time (macOS PDFKit renders the page to PNG). image() only
 // loads files inside the app folder, so pictures, PDF pages (and the SVG preview) are copied to data/file-editor/
 // (a remote one through base64) and removed when the tab closes.
-import { View, div, svg, image } from "gpui-kit";
+// Animated GIF, WebP and APNG (macOS) are split into PNG frames by ImageIO and played while the tab shows.
+// Audio plays through ffplay (ffmpeg) in the background: play/pause, seek, volume. CSV/TSV have a Table
+// view; HTML has Open in browser (GPUI has no web view, so no in-pane rendering).
+import { View, div, svg, image, uniform_list } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
 import { readTextFile, writeTextFile, exec, props, panes, spaces, theme, settings, shared, setShared, notify, appHome, window, run } from "herdr";
 import { language, syntaxFor } from "./lang.js";
+import { parseCsv, delimiterFor } from "./csv.js";
 
 const base = (p) => p.split(/[\\/]/).pop();
 const ICON = "mods/file-editor";
-const PICTURE = /\.(png|jpe?g|gif|webp|bmp|ico|tiff?)$/i;
+const PICTURE = /\.(png|apng|jpe?g|gif|webp|bmp|ico|tiff?)$/i;
+const ANIMATED = /\.(gif|webp|a?png)$/i;   // may hold several frames
+const AUDIO = /\.(mp3|wav|ogg|oga|opus|m4a|aac|flac|aiff?)$/i;
+const CSV = /\.(csv|tsv)$/i;
+const HTML = /\.html?$/i;
 const SVG = /\.svg$/i;
 const PDF = /\.pdf$/i;
 const MARKDOWN = /\.(md|markdown|mdx)$/i;
+const CSV_MAX_ROWS = 5000;
+const FRAME_PIXELS_MAX = 400e6;  // width × height × frames written as PNG; longer animations stop early
+const FRAMES_MAX = 1000;
 const CACHE = "data/file-editor";
 const PLAIN_AT = 150 * 1024;     // larger: no highlighting or folding (they re-parse per keystroke)
 const READ_MAX = 1024 * 1024;    // readTextFile's limit; larger files show their first MB, read-only
 const MD_PREVIEW_MAX = 300 * 1024; // larger Markdown opens in Code view
-const REMOTE_PICTURE_MAX = 5.5 * 1024 * 1024; // base64 (plus line breaks) must fit exec's 8 MiB output
 const ZOOMS = [0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 8];
 const LANG_NAME = { js: "JavaScript", json: "JSON", yaml: "YAML", html: "HTML", xml: "XML", css: "CSS", python: "Python", rust: "Rust",
   go: "Go", bash: "Shell", sql: "SQL", java: "Java", c: "C", lua: "Lua", ruby: "Ruby", text: "Text", markdown: "Markdown", md: "Markdown" };
 const kb = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+const clock = (sec) => { const s = Math.floor(sec); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+// The system's default app for a local file (a browser for HTML).
+const openExternal = (file) => {
+  const p = window()?.platform;
+  const [cmd, args] = p === "macos" ? ["open", [file]] : p === "windows" ? ["cmd", ["/c", "start", "", file]] : ["xdg-open", [file]];
+  exec(cmd, args).then((r) => { if (r.code !== 0) throw new Error(r.stderr.trim() || `${cmd} failed`); })
+    .catch((e) => notify({ title: `Cannot open ${base(file)}`, body: String(e?.message ?? e), level: "error" }));
+};
 const hash = (s) => { let h = 5381; for (const c of s) h = ((h << 5) + h + c.charCodeAt(0)) >>> 0; return h.toString(36); };
 
 // `osascript -l JavaScript -e RENDER_SCRIPT <pdf> <page> <png>`: one page as PNG on white, longest edge at most 2048 px,
@@ -60,6 +78,39 @@ function run(argv) {
   return JSON.stringify({ pages, page: n, width: pw, height: ph });
 }`;
 const PDF_ERRORS = { locked: "PDF is password-protected", empty: "PDF has no pages", broken: "Cannot read this PDF", write: "Cannot write the page image" };
+
+// `osascript -l JavaScript -e FRAMES_SCRIPT <image> <out-prefix> <max-frames> <max-pixels>`: every frame of an
+// animated GIF/WebP/APNG as <out-prefix><i>.png (ImageIO composites each one). Prints {count, delays} (ms per
+// frame written) or {count: 1} for a still image. Delays of 10 ms or less play at 100 ms, as browsers do.
+const FRAMES_SCRIPT = `ObjC.import("ImageIO"); ObjC.import("AppKit");
+function run(argv) {
+  const [src, prefix, maxFrames, maxPixels] = argv;
+  const isrc = $.CGImageSourceCreateWithURL($.NSURL.fileURLWithPath(src), $());
+  if (!isrc) return JSON.stringify({ error: "broken" });
+  const count = Number($.CGImageSourceGetCount(isrc));
+  if (count <= 1) return JSON.stringify({ count });
+  const fm = $.NSFileManager.defaultManager, cancel = prefix + "cancel";
+  const cancelled = () => {
+    if (!fm.fileExistsAtPath(cancel)) return false;
+    for (let j = 0; j <= delays.length; j++) fm.removeItemAtPathError(prefix + j + ".png", $());
+    fm.removeItemAtPathError(cancel, $());
+    return true;
+  };
+  const delays = [];
+  for (let i = 0; i < count && i < +maxFrames; i++) {
+    if (cancelled()) return JSON.stringify({ error: "cancelled" });
+    const p = ObjC.deepUnwrap(ObjC.castRefToObject($.CGImageSourceCopyPropertiesAtIndex(isrc, i, $()))) || {};
+    if (delays.length && (p.PixelWidth || 1) * (p.PixelHeight || 1) * (i + 1) > +maxPixels) break;
+    const d = p["{GIF}"] || p["{PNG}"] || p["{WebP}"] || {};
+    const s = d.UnclampedDelayTime || d.DelayTime || 0;
+    const rep = $.NSBitmapImageRep.alloc.initWithCGImage($.CGImageSourceCreateImageAtIndex(isrc, i, $()));
+    const png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $());
+    if (png.isNil() || !png.writeToFileAtomically(prefix + i + ".png", true)) return JSON.stringify({ error: "write" });
+    delays.push(s > 0.011 ? Math.round(s * 1000) : 100);
+  }
+  if (cancelled()) return JSON.stringify({ error: "cancelled" });
+  return JSON.stringify({ count, delays });
+}`;
 
 // One exec per poll: "<mtime> <size> <writable>" (or "missing"), then the git porcelain XY of the file.
 const STAT = `f="$1"; if [ ! -e "$f" ]; then echo missing; exit 0; fi
@@ -116,9 +167,11 @@ export default class FileEditor extends View {
     const p = props() ?? {};
     this.file = p.file; this.on = p.on ?? null; this.space = p.space; this.icon = p.icon ?? null;
     this.wantPreview = Boolean(p.preview);
-    this.kind = PICTURE.test(this.file ?? "") ? "picture" : PDF.test(this.file ?? "") ? "pdf" : "text";
+    const f = this.file ?? "";
+    this.kind = PICTURE.test(f) ? "picture" : PDF.test(f) ? "pdf" : AUDIO.test(f) ? "audio" : "text";
     this.page = 1;
-    if (this.kind === "pdf") { this.handle = cx.focus_handle(); this.handle.focus(); } // arrow/page keys turn pages
+    // pdf: arrow/page keys turn pages; audio: space plays, arrows seek; animation: space pauses.
+    if (this.kind !== "text") { this.handle = cx.focus_handle(); this.handle.focus(); }
     this.mode = "code";          // "preview" for Markdown and SVG (set on load)
     this.zoom = "fit";
     this.dirty = false;
@@ -141,13 +194,23 @@ export default class FileEditor extends View {
     });
   }
 
+  // Closing has about 250 ms before this script's tasks are cancelled, so one shell does all the cleanup and
+  // starts first: stop the audio, leave markers for work still running outside (a remote copy, frame extraction:
+  // they see them and clean up after themselves), and remove the copies and frames already here.
   async close() {
+    this.closed = true;
+    this.animTask?.cancel();
+    const marks = [this.fetching && `${this.fetching}.cancel`, this.framing && `${this.framing}-fcancel`].filter(Boolean);
+    const paths = [this.staged && `${appHome()}/${this.staged}`, this.pdfCopy, this.audioCopy].filter(Boolean);
+    const cleanup = exec("sh", ["-c", `[ -n "$1" ] && kill "$1" 2>/dev/null; shift
+while [ "$1" != "--" ]; do : > "$1"; shift; done; shift
+for p; do rm -f "$p" "$p"-f*.png; done; exit 0`, "close", String(this.audio?.pid ?? ""), ...marks, "--", ...paths]).catch(() => null);
     this.state?.release();
     this.publish({ drop: true });
     this.promote();
-    await this.unstage();
-    if (this.pdfCopy) await exec("rm", ["-f", this.pdfCopy]).catch(() => null);
+    await cleanup;
   }
+
 
   // tab.new focuses the new pane, so the first render finds its tab there.
   register() {
@@ -204,8 +267,9 @@ export default class FileEditor extends View {
         const s = await stat(this.file, this.on);
         if (s.missing) { this.error = "This file is no longer on disk"; return; }
         this.stamp = s.stamp; this.size = s.size; this.writable = s.writable; this.git = s.git; this.publish();
-        if (this.kind === "picture") return await this.stagePicture(s.size);
+        if (this.kind === "picture") { await this.stagePicture(s.size); cx.notify(); return await this.stageFrames(cx); }
         if (this.kind === "pdf") return await this.stagePdf(s.size);
+        if (this.kind === "audio") return await this.stageAudio(s.size);
         let text;
         this.truncated = s.size > READ_MAX;
         if (this.truncated) text = (await exec("head", ["-c", String(READ_MAX), this.file], { on: this.on })).stdout;
@@ -227,6 +291,7 @@ export default class FileEditor extends View {
         if (this.mode === "code" && !this.modeSet) {
           if (MARKDOWN.test(this.file) && text.length <= MD_PREVIEW_MAX) this.mode = "preview";
           if (SVG.test(this.file)) this.mode = "preview";
+          if (CSV.test(this.file)) this.mode = "preview";
           this.modeSet = true;
         }
         if (SVG.test(this.file) && this.mode === "preview") await this.stageSvg(text);
@@ -255,7 +320,6 @@ export default class FileEditor extends View {
 
   async stagePicture(size) {
     await this.unstage();
-    if (this.on && size > REMOTE_PICTURE_MAX) { this.error = `Remote pictures up to ${kb(REMOTE_PICTURE_MAX)} open here (this one is ${kb(size)}).`; return; }
     await exec("sh", ["-c", 'mkdir -p "$1"; find "$1" -type f -mtime +1 -delete 2>/dev/null; exit 0', "sweep", `${appHome()}/${CACHE}`]);
     const rel = `${CACHE}/${hash(`${this.on}|${this.file}`)}-${Date.now().toString(36)}.${this.file.split(".").pop().toLowerCase()}`;
     const dst = `${appHome()}/${rel}`;
@@ -263,6 +327,7 @@ export default class FileEditor extends View {
     else {
       const c = await exec("cp", [this.file, dst]);
       if (c.code !== 0) throw new Error(c.stderr.trim() || "cannot copy it");
+      await this.dropIfClosed(dst);
     }
     // Pixel size for 100% and the zoom steps (sips: macOS; without it, Fit only).
     const s = await exec("sips", ["-g", "pixelWidth", "-g", "pixelHeight", dst]).catch(() => null);
@@ -271,22 +336,178 @@ export default class FileEditor extends View {
     this.staged = rel;
   }
 
-  // exec has no binary output: base64 there, decode here.
+  // `hc exec --on` streams the remote bytes unchanged straight into a file here (exec's own output is text and
+  // capped at 8 MiB, writeTextFile at 1 MiB). A failed copy leaves nothing behind.
+  // Closing the tab cancels this task but not the copy, so close() leaves <dst>.cancel and the shell drops the copy.
   async fetchRemote(dst) {
-    const r = await exec("sh", ["-c", 'base64 < "$1"', "base64", this.file], { on: this.on, timeout: 60000 });
-    if (r.code !== 0) throw new Error(r.stderr.trim() || "cannot read it");
-    await writeTextFile(`${dst}.b64`, r.stdout, null);
-    const d = await exec("sh", ["-c", 'base64 -d < "$1" > "$2"; c=$?; rm -f "$1"; exit $c', "b64", `${dst}.b64`, dst]);
-    if (d.code !== 0) throw new Error(d.stderr.trim() || "cannot decode it");
+    this.fetching = dst;
+    try {
+      const r = await exec("sh", ["-c", `if hc exec --on "$1" cat -- "$2" > "$3.part"; then
+  if [ -e "$3.cancel" ]; then rm -f "$3.part" "$3.cancel"; exit 1; fi; mv -f "$3.part" "$3"
+else c=$?; rm -f "$3.part" "$3.cancel"; exit $c; fi`, "fetch", this.on, this.file, dst], { timeout: 600000 });
+      if (r.code !== 0) throw new Error(r.stderr.trim() || "cannot copy it from that machine");
+    } finally { this.fetching = null; }
+    await this.dropIfClosed(dst);
+  }
+
+  // The tab closed while a copy was coming: close() had nothing to remove yet, so remove it now and stop loading.
+  async dropIfClosed(path) {
+    if (!this.closed) return;
+    await exec("rm", ["-f", path]).catch(() => null);
+    throw new Error("closed");
+  }
+
+  // Animated pictures (macOS): frames beside the staged copy as <staged>-f<i>.png, removed with it.
+  // Still pictures, other platforms or an ImageIO failure keep the plain image (its first frame).
+  async stageFrames(cx) {
+    if (!this.staged || !ANIMATED.test(this.file) || window()?.platform !== "macos") return;
+    const staged = this.staged;
+    this.framing = `${appHome()}/${staged}`;
+    const r = await exec("osascript", ["-l", "JavaScript", "-e", FRAMES_SCRIPT, `${appHome()}/${staged}`, `${appHome()}/${staged}-f`,
+      String(FRAMES_MAX), String(FRAME_PIXELS_MAX)], { timeout: 120000 }).catch(() => null);
+    this.framing = null;
+    const line = r?.stdout.split("\n").map((l) => l.trim()).find((l) => l.startsWith("{"));
+    let out = null;
+    try { out = line ? JSON.parse(line) : null; } catch { out = null; }
+    // Closed or reloaded meanwhile: unstage already ran, so drop the frames written after it.
+    if (this.staged !== staged) return exec("sh", ["-c", 'rm -f "$1"-f*.png', "frames", `${appHome()}/${staged}`]).catch(() => null);
+    if (!(out?.delays?.length > 1)) return;
+    this.anim = { frames: out.delays.map((_, i) => `${staged}-f${i}.png`), delays: out.delays, count: out.count, i: 0, playing: true };
+    this.animate(cx);
+  }
+
+  // One frame per tick at that frame's own delay, only while this tab shows; paused, no timer runs.
+  animate(cx) {
+    this.animTask?.cancel();
+    const a = this.anim;
+    if (!a?.playing) return;
+    const shown = () => spaces().some((s) => s.tabs.some((t) => t.id === this.tab && t.active));
+    const tick = (cx) => {
+      if (this.anim !== a || !a.playing) return;
+      const visible = shown();
+      if (visible) { a.i = (a.i + 1) % a.frames.length; cx.notify(); }
+      this.animTask = cx.timer.after(visible ? Math.max(20, a.delays[a.i]) : 500, tick);
+    };
+    this.animTask = cx.timer.after(Math.max(20, a.delays[a.i]), tick);
+  }
+
+  toggleAnim(cx) {
+    if (!this.anim) return;
+    this.anim.playing = !this.anim.playing;
+    this.animate(cx);
+    cx.notify();
+  }
+
+  stepFrame(by, cx) {
+    const a = this.anim;
+    if (!a) return;
+    a.playing = false; this.animTask?.cancel();
+    a.i = (a.i + by + a.frames.length) % a.frames.length;
+    cx.notify();
+  }
+
+  // ---- audio (ffprobe for facts, ffplay -nodisp to play; seeking or a new volume restarts it at the position)
+
+  async stageAudio(size) {
+    this.stopAudio();
+    let src = this.file;
+    if (this.on) {
+      // A reload fetches a fresh copy: drop the previous one first (and anything left over from a day ago).
+      await exec("sh", ["-c", 'mkdir -p "$1"; find "$1" -type f -mtime +1 -delete 2>/dev/null; [ -n "$2" ] && rm -f "$2"; exit 0', "sweep", `${appHome()}/${CACHE}`, this.audioCopy ?? ""]);
+      this.audioCopy = `${appHome()}/${CACHE}/${hash(`${this.on}|${this.file}`)}-${Date.now().toString(36)}.${this.file.split(".").pop().toLowerCase()}`;
+      await this.fetchRemote(this.audioCopy);
+      src = this.audioCopy;
+    }
+    const r = await exec("ffprobe", ["-v", "error", "-select_streams", "a:0", "-show_entries",
+      "format=duration,bit_rate:stream=codec_name,sample_rate,channels", "-of", "json", src]).catch(() => null);
+    if (!r || r.code === 127) { this.error = "Audio playback needs ffmpeg (brew install ffmpeg)"; return; }
+    let info = null;
+    try { info = JSON.parse(r.stdout); } catch { info = null; }
+    const st = info?.streams?.[0];
+    if (r.code !== 0 || !st) { this.error = "Cannot read this audio file"; return; }
+    const duration = Number(info.format?.duration);
+    this.audio = { src, duration: duration > 0 ? duration : null, codec: st.codec_name, rate: Number(st.sample_rate),
+      channels: Number(st.channels), bitrate: Number(info.format?.bit_rate), pos: 0, playing: false, volume: this.audio?.volume ?? 80, pid: null };
+  }
+
+  audioPos() {
+    const a = this.audio;
+    if (!a) return 0;
+    const pos = a.playing && a.pid ? a.pos + (Date.now() - a.startedAt) / 1000 : a.pos;
+    return a.duration ? Math.min(pos, a.duration) : pos;
+  }
+
+  stopAudio() {
+    const a = this.audio;
+    this.audioGen = (this.audioGen ?? 0) + 1;
+    this.audioTask?.cancel(); this.audioTask = null;
+    if (!a) return;
+    if (a.playing) a.pos = this.audioPos();
+    if (a.pid) exec("kill", [String(a.pid)]).catch(() => null);
+    a.pid = null; a.playing = false;
+  }
+
+  playAudio(cx, at) {
+    const a = this.audio;
+    if (!a) return;
+    let from = Math.max(0, at ?? this.audioPos());
+    if (a.duration && from >= a.duration - 0.05) from = 0;
+    this.stopAudio();
+    a.pos = from; a.playing = true;
+    const gen = this.audioGen;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const r = await exec("sh", ["-c", 'command -v ffplay >/dev/null || exit 127; ffplay -nodisp -autoexit -loglevel quiet -ss "$2" -volume "$3" "$1" </dev/null >/dev/null 2>&1 & echo $!',
+        "play", a.src, from.toFixed(2), String(a.volume)]).catch(() => null);
+      const pid = r?.code === 0 ? Number(r.stdout.trim()) : 0;
+      if (gen !== this.audioGen) { if (pid) exec("kill", [String(pid)]).catch(() => null); return; }
+      if (!pid) {
+        a.playing = false;
+        notify({ title: "Cannot play audio", body: "ffplay did not start (brew install ffmpeg)", level: "error" });
+        return cx.notify();
+      }
+      a.pid = pid; a.startedAt = Date.now();
+      // The time display, the end of the file, and ffplay quitting on its own.
+      let n = 0;
+      this.audioTask = cx.timer.every(500, (cx) => {
+        if (gen !== this.audioGen) return;
+        if (a.duration && this.audioPos() >= a.duration) { this.stopAudio(); a.pos = 0; return cx.notify(); }
+        if (++n % 4 === 0) cx.spawn(async (cx) => {
+          const alive = await exec("kill", ["-0", String(pid)]).catch(() => null);
+          if (gen === this.audioGen && alive?.code !== 0) { this.stopAudio(); if (a.duration && a.pos >= a.duration - 1) a.pos = 0; cx.notify(); }
+        });
+        cx.notify();
+      });
+      cx.notify();
+    });
+  }
+
+  toggleAudio(cx) {
+    if (!this.audio) return;
+    if (this.audio.playing) { this.stopAudio(); cx.notify(); } else this.playAudio(cx);
+  }
+
+  seekAudio(seconds, cx) {
+    const a = this.audio;
+    if (!a) return;
+    const to = Math.max(0, a.duration ? Math.min(seconds, a.duration) : seconds);
+    if (a.playing) this.playAudio(cx, to); else { a.pos = to; cx.notify(); }
+  }
+
+  setVolume(v, cx) {
+    const a = this.audio;
+    if (!a) return;
+    a.volume = Math.round(Math.min(100, Math.max(0, v)));
+    if (a.playing) this.playAudio(cx); else cx.notify();
   }
 
   // Local PDFs render from the file itself; remote ones from a copy (fetched again on every load: the stamp changed).
   async stagePdf(size) {
     if (window()?.platform !== "macos") { this.error = "PDF preview needs macOS"; return; }
-    if (this.on && size > REMOTE_PICTURE_MAX) { this.error = `Remote PDFs up to ${kb(REMOTE_PICTURE_MAX)} open here (this one is ${kb(size)}).`; return; }
     await exec("sh", ["-c", 'mkdir -p "$1"; find "$1" -type f -mtime +1 -delete 2>/dev/null; exit 0', "sweep", `${appHome()}/${CACHE}`]);
     if (this.on) {
-      this.pdfCopy = `${appHome()}/${CACHE}/${hash(`${this.on}|${this.file}`)}.pdf`;
+      if (this.pdfCopy) await exec("rm", ["-f", this.pdfCopy]).catch(() => null);
+      this.pdfCopy = `${appHome()}/${CACHE}/${hash(`${this.on}|${this.file}`)}-${Date.now().toString(36)}.pdf`;
       await this.fetchRemote(this.pdfCopy);
     }
     await this.renderPage(this.page);
@@ -332,10 +553,11 @@ export default class FileEditor extends View {
   }
 
   unstage() {
+    this.animTask?.cancel(); this.animTask = null; this.anim = null;
     if (!this.staged) return Promise.resolve();
     const path = `${appHome()}/${this.staged}`;
     this.staged = null;
-    return exec("rm", ["-f", path]).catch(() => null);
+    return exec("sh", ["-c", 'rm -f "$1" "$1"-f*.png', "unstage", path]).catch(() => null);
   }
 
   scale() {
@@ -417,13 +639,21 @@ export default class FileEditor extends View {
   }
 
   toolbar(t) {
-    const pdf = this.kind === "pdf", picture = this.kind === "picture" || pdf, svgFile = SVG.test(this.file), md = MARKDOWN.test(this.file);
-    const showsPicture = picture || (svgFile && this.mode === "preview");
+    const pdf = this.kind === "pdf", audio = this.kind === "audio", picture = this.kind === "picture" || pdf || audio;
+    const svgFile = SVG.test(this.file), md = MARKDOWN.test(this.file), csv = CSV.test(this.file), anim = this.anim;
+    const showsPicture = (picture && !audio) || (svgFile && this.mode === "preview");
+    const a = this.audio;
     const info = pdf
       ? [this.pages && `${this.pages} page${this.pages === 1 ? "" : "s"}`, this.size != null && kb(this.size)]
+      : audio
+      ? [a?.duration && clock(a.duration), a?.codec, a?.rate > 0 && `${(a.rate / 1000).toFixed(1)} kHz`,
+        a?.channels > 0 && (a.channels === 1 ? "mono" : a.channels === 2 ? "stereo" : `${a.channels} ch`),
+        a?.bitrate > 0 && `${Math.round(a.bitrate / 1000)} kbps`, this.size != null && kb(this.size)]
       : picture
-      ? [this.dims && `${this.dims.w}×${this.dims.h}`, this.size != null && kb(this.size)]
-      : [this.lines != null && `${this.lines} lines`, LANG_NAME[this.lang] ?? this.lang, this.size != null && kb(this.size)];
+      ? [this.dims && `${this.dims.w}×${this.dims.h}`, anim && `${anim.frames.length}${anim.count > anim.frames.length ? ` of ${anim.count}` : ""} frames`,
+        this.size != null && kb(this.size)]
+      : [csv && this.csv?.rows.length > 0 && `${this.csv.rows.length - 1}${this.csv.truncated ? "+" : ""} rows`, this.lines != null && `${this.lines} lines`,
+        LANG_NAME[this.lang] ?? this.lang, this.size != null && kb(this.size)];
     const notes = [this.on, this.truncated && `showing first ${kb(READ_MAX)} · read-only`, !this.truncated && this.plain && "large · no highlighting", this.lossy && "not valid UTF-8 · read-only",
       this.writable === false && "read-only", this.saving && "Saving…"].filter(Boolean);
     const seg = (id, icon, label, mode) => h_flex().id(id).h(22).px(8).gap(5).items_center().rounded(4).text_size(11)
@@ -434,8 +664,13 @@ export default class FileEditor extends View {
     return h_flex().id("fe-bar").h(36).flex_none().px(10).gap(4).items_center().border_b(1).border_color(t.border).bg(t.background).text_size(11)
       .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child([...info, ...notes].filter(Boolean).join(" · ")))
       .when(this.isPreview(), (el) => el.child(this.button(t, "fe-keep", "pin.svg", "Keep this tab open (double-click its tab or file does the same)", () => this.promote())))
-      .when(svgFile || md, (el) => el.child(h_flex().flex_none().p(1).gap(1).rounded(6).border_1().border_color(t.border)
-        .child(seg("fe-preview", "eye.svg", "Preview", "preview")).child(seg("fe-code", "code.svg", "Code", "code"))))
+      .when(svgFile || md || csv, (el) => el.child(h_flex().flex_none().p(1).gap(1).rounded(6).border_1().border_color(t.border)
+        .child(csv ? seg("fe-preview", "table.svg", "Table", "preview") : seg("fe-preview", "eye.svg", "Preview", "preview"))
+        .child(seg("fe-code", "code.svg", "Code", "code"))))
+      .when(HTML.test(this.file) && !this.on, (el) => el.child(this.button(t, "fe-browser", "external.svg", "Open in browser", () => openExternal(this.file))))
+      .when(Boolean(anim), (el) => el
+        .child(this.button(t, "fe-anim", anim.playing ? "pause.svg" : "play.svg", anim.playing ? "Pause (Space)" : "Play (Space)", (cx) => this.toggleAnim(cx)))
+        .child(div().w(56).flex_none().text_center().text_color(t.muted).child(`${anim.i + 1} / ${anim.frames.length}`)))
       .when(pdf && Boolean(this.pages), (el) => el
         .child(this.button(t, "fe-prev", "‹", "Previous page (← / Page Up)", (cx) => this.goPage(this.page - 1, cx), { disabled: this.page <= 1 }))
         .child(div().flex_none().px(4).text_color(t.muted).child(`${this.page} / ${this.pages}`))
@@ -446,7 +681,7 @@ export default class FileEditor extends View {
         .child(div().w(42).flex_none().text_center().text_color(t.muted).child(canZoom ? `${Math.round(this.scale() * 100)}%` : ""))
         .child(this.button(t, "fe-zin", "+", "Zoom in (⌘ + wheel)", (cx) => this.step(1, cx), { disabled: !canZoom }))
         .child(this.button(t, "fe-100", "1:1", "Actual size", (cx) => { this.zoom = 1; cx.notify(); }, { on: this.zoom === 1, disabled: !canZoom })))
-      .when(!showsPicture && Boolean(this.state), (el) => el.child(this.button(t, "fe-wrap", "wrap.svg", `Wrap long lines (⌥Z) · ${this.wrap ? "on" : "off"}`, (cx) => this.toggleWrap(cx), { on: this.wrap })))
+      .when(!showsPicture && !(csv && this.mode === "preview") && Boolean(this.state), (el) => el.child(this.button(t, "fe-wrap", "wrap.svg", `Wrap long lines (⌥Z) · ${this.wrap ? "on" : "off"}`, (cx) => this.toggleWrap(cx), { on: this.wrap })))
       .child(this.button(t, "fe-copy", "copy.svg", picture ? "Copy path" : "Copy file text", (cx) => this.copy(cx)))
       .child(this.button(t, "fe-reload", "refresh.svg", this.dirty ? "Reload from disk (drops your edits)" : "Reload from disk", (cx) => { this.dirty = false; this.publish(); this.load(cx); }))
       .when(!picture, (el) => el.child(this.truncated || this.writable === false || this.lossy
@@ -459,7 +694,11 @@ export default class FileEditor extends View {
     const s = this.scale();
     const w = this.dims ? this.dims.w * s : this.view?.width ?? 400, h = this.dims ? this.dims.h * s : this.view?.height ?? 300;
     // SVGs often draw with currentColor (black when no color is set): give them a light canvas.
-    const pic = div().flex_none().when(svgFile, (el) => el.bg("#f5f5f5").rounded(6)).child(image(this.staged).w(w).h(h));
+    // An animation shows its current frame; the next one sits underneath at 1 px so it is loaded before its turn.
+    const a = this.anim, src = a ? a.frames[a.i] : this.staged;
+    const pic = div().flex_none().relative().when(svgFile, (el) => el.bg("#f5f5f5").rounded(6))
+      .when(Boolean(a), (el) => el.child(image(a.frames[(a.i + 1) % a.frames.length]).absolute().top(0).left(0).w(1).h(1).opacity(0.01)))
+      .child(image(src).w(w).h(h));
     const wheel = (e, cx) => {
       if (!(e.modifiers.platform || e.modifiers.control) || !this.dims) return;
       cx.stop_propagation();
@@ -470,14 +709,87 @@ export default class FileEditor extends View {
       : div().id("fe-pic").flex_1().min_h(0).p(10).overflow_scroll().on_scroll_wheel(wheel).child(pic);
   }
 
+  // A seek or volume bar: a press anywhere sets that fraction.
+  bar(t, id, frac, onPick) {
+    return div().id(id).flex_1().min_w(0).h(18).flex().items_center().cursor_pointer()
+      .on_mouse_down("left", (e, cx) => {
+        const width = e.bounds?.width, x = e.local_position?.x;
+        if (width > 0 && x != null) onPick(Math.min(1, Math.max(0, x / width)), cx);
+      })
+      .child(div().w_full().h(4).rounded(2).bg(t.border)
+        .child(div().h_full().rounded(2).bg(t.accent).w(`${(Math.min(1, Math.max(0, frac)) * 100).toFixed(2)}%`)));
+  }
+
+  audioBody(t) {
+    const a = this.audio;
+    if (!a) return div().flex_1().p(16).text_color(t.dim).child("Loading…");
+    const pos = this.audioPos();
+    return div().flex_1().min_h(0).flex().items_center().justify_center().p(24).child(
+      v_flex().w_full().max_w(560).gap(14).p(20).rounded(10).border_1().border_color(t.border).bg(t.surface)
+        .child(h_flex().gap(12).items_center()
+          .child(div().size(44).flex_none().rounded(8).bg(t.raised).flex().items_center().justify_center().text_color(t.accent)
+            .child(svg(`${ICON}/music.svg`).size(22)))
+          .child(v_flex().min_w(0).flex_1()
+            .child(div().truncate().text_size(14).font_semibold().child(base(this.file)))
+            .child(div().truncate().text_size(11).text_color(t.dim).child([a.codec, a.duration && clock(a.duration)].filter(Boolean).join(" · ")))))
+        .child(h_flex().gap(10).items_center()
+          .child(div().id("fe-play").size(32).flex_none().rounded_full().flex().items_center().justify_center()
+            .bg(t.accent).text_color(t.accent_foreground).hover((s) => s.opacity(0.9)).tooltip(a.playing ? "Pause (Space)" : "Play (Space)")
+            .on_click((_e, cx) => this.toggleAudio(cx)).child(svg(`${ICON}/${a.playing ? "pause" : "play"}.svg`).size(14)))
+          .child(div().flex_none().text_size(11).text_color(t.muted).child(clock(pos)))
+          .child(a.duration ? this.bar(t, "fe-seek", pos / a.duration, (f, cx) => this.seekAudio(f * a.duration, cx)) : div().flex_1())
+          .child(div().flex_none().text_size(11).text_color(t.dim).child(a.duration ? clock(a.duration) : "")))
+        .child(h_flex().gap(8).items_center().text_size(11).text_color(t.muted)
+          .child(svg(`${ICON}/volume.svg`).size(14).flex_none())
+          .child(div().w(140).flex_none().flex().child(this.bar(t, "fe-volume", a.volume / 100, (f, cx) => this.setVolume(f * 100, cx))))
+          .child(div().w(36).flex_none().child(`${a.volume}%`))
+          .child(div().flex_1().text_right().text_color(t.dim).child("Space play · ← → 5 s"))));
+  }
+
+  // CSV/TSV as a table: the first row is the header; columns sized from the first 200 rows.
+  csvBody(t) {
+    const text = this.state.value();
+    if (this.csvText !== text) {
+      this.csvText = text;
+      this.csv = parseCsv(text, delimiterFor(this.file, text), CSV_MAX_ROWS);
+      const cols = Math.max(0, ...this.csv.rows.map((r) => r.length));
+      this.csvWidths = Array.from({ length: cols }, (_, c) => {
+        let n = 0;
+        for (const r of this.csv.rows.slice(0, 200)) n = Math.max(n, (r[c] ?? "").length);
+        return Math.min(360, Math.max(56, n * 7.5 + 20));
+      });
+    }
+    const { rows, truncated } = this.csv;
+    if (!rows.length) return div().flex_1().p(16).text_color(t.dim).child("Empty file");
+    const widths = this.csvWidths, numW = Math.max(40, String(rows.length).length * 8 + 16);
+    const total = numW + widths.reduce((s, w) => s + w, 0);
+    const row = (cells, i, header) => h_flex().h(26).w(total).flex_none().text_size(12)
+      .bg(header ? t.surface : i % 2 ? t.background : t.canvas).when(header, (el) => el.font_semibold().border_b(1).border_color(t.border))
+      .child(div().w(numW).flex_none().px(8).text_right().text_color(t.dim).child(header ? "" : String(i)))
+      .children(widths.map((w, c) => div().w(w).flex_none().px(8).truncate().border_l(1).border_color(t.border)
+        .child((cells[c] ?? "").replace(/\s+/g, " "))));
+    // A virtual list needs a definite height: the pane's, less the toolbar, header and footer.
+    const listH = Math.max(26, (this.view?.height ?? 300) + 20 - 26 - (truncated ? 24 : 0));
+    return v_flex().flex_1().min_h(0)
+      .child(div().id("fe-csv").flex_1().min_h(0).overflow_x_scroll().child(v_flex().w(total)
+        .child(row(rows[0], 0, true))
+        .child(div().w(total).h(listH).child(uniform_list("fe-csv-rows", rows.length - 1, (i) => String(i),
+          (range) => { const out = []; for (let i = range.start; i < range.end; i++) out.push(row(rows[i + 1], i + 1, false)); return out; })
+          .size_full()))))
+      .when(truncated, (el) => el.child(div().h(24).flex_none().px(10).flex().items_center().border_t(1).border_color(t.border)
+        .text_size(11).text_color(t.dim).child(`Showing the first ${CSV_MAX_ROWS} rows · Code shows the whole file`)));
+  }
+
   render(cx) {
     this.register();
     const t = theme();
     const svgFile = SVG.test(this.file ?? "");
     let body;
     if (this.error) body = div().flex_1().p(16).text_color(t.dim).child(this.error);
+    else if (this.kind === "audio") body = this.audioBody(t);
     else if (this.kind !== "text" || (svgFile && this.mode === "preview")) body = this.pictureBody(t, svgFile);
     else if (!this.state) body = div().flex_1().p(16).text_color(t.dim).child(this.file ? "Loading…" : "No file");
+    else if (this.mode === "preview" && CSV.test(this.file)) body = this.csvBody(t);
     else if (this.mode === "preview") {
       body = div().id("fe-md").flex_1().min_h(0).overflow_y_scrollbar()
         .child(h_flex().w_full().justify_center().child(div().w_full().max_w(860).px(28).py(20).text_size(13)
@@ -491,6 +803,15 @@ export default class FileEditor extends View {
         else if (e.keystroke === "alt-z" && this.state) { this.toggleWrap(cx); cx.stop_propagation(); }
         else if (this.kind === "pdf" && ["left", "right", "pageup", "pagedown"].includes(e.keystroke)) {
           this.goPage(this.page + (e.keystroke === "left" || e.keystroke === "pageup" ? -1 : 1), cx); cx.stop_propagation();
+        }
+        else if (this.kind === "audio" && this.audio && ["space", "left", "right"].includes(e.keystroke)) {
+          if (e.keystroke === "space") this.toggleAudio(cx);
+          else this.seekAudio(this.audioPos() + (e.keystroke === "left" ? -5 : 5), cx);
+          cx.stop_propagation();
+        }
+        else if (this.anim && ["space", "left", "right"].includes(e.keystroke)) {
+          if (e.keystroke === "space") this.toggleAnim(cx); else this.stepFrame(e.keystroke === "left" ? -1 : 1, cx);
+          cx.stop_propagation();
         }
       })
       // The picture area: the pane minus the toolbar and padding. Sizes come zoomed; w()/h() are not.

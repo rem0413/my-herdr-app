@@ -27,9 +27,10 @@ const host = { shared, setShared, spaces, run, notify: n => notices.push(n), hc:
 async function load(path, extra = '') {
   const mod = new vm.SourceTextModule(await readFile(path, 'utf8') + extra);
   await mod.link(async name => {
-    const values = name === 'herdr' ? host : name === 'gpui-kit' ? { View: class {}, div() {}, svg() {}, image() {} }
+    const values = name === 'herdr' ? host : name === 'gpui-kit' ? { View: class {}, div() {}, svg() {}, image() {}, uniform_list() {} }
       : name === 'gpui-base' ? { v_flex() {}, h_flex() {}, Editor: {}, EditorState: {}, TextView: {}, InputState: {}, Input: {}, Scrollbar: {}, v_virtual_list() {} }
       : name === './lang.js' ? { language() {}, syntaxFor() {} }
+      : name === './csv.js' ? { parseCsv() {}, delimiterFor() {} }
       : name === './search.js' ? { matchFiles() {}, bytes() {}, parseListing() {} } : { iconFor() {} };
     return new vm.SyntheticModule(Object.keys(values), function () { for (const [k, v] of Object.entries(values)) this.setExport(k, v); });
   });
