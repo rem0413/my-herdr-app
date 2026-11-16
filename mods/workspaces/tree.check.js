@@ -1,6 +1,6 @@
 // Run: bun mods/workspaces/tree.check.js  (exit 0 = pass)
 import assert from "node:assert/strict";
-import { EMPTY, canParent, flatten, reconcile, setParent, startReopen, togglePin } from "./tree.js";
+import { EMPTY, canParent, descendants, dismiss, flatten, reconcile, rememberAutoParents, setParent, startReopen, togglePin } from "./tree.js";
 
 const sp = (id, name = id, machine = null) => ({ id, name, named: true, folder: `/w/${name}`, machine });
 // "<depth>[x if closed]:<entry id>" per visible row.
@@ -128,6 +128,50 @@ s = setParent(s, "w", "x");
 assert.deepEqual(view(s, live, { w: "m" }), ["0:m", "0:x", "1:w"]);
 s = setParent(s, "w", null);
 assert.deepEqual(view(s, live, { w: "m" }), ["0:m", "0:w", "0:x"]);
+
+// A closed child stays (like a pin) while its parent is open, at any depth; it goes with the parent.
+live = [sp("p"), sp("c"), sp("g")];
+s = setParent(setParent(reconcile(EMPTY, live), "c", "p"), "g", "c");
+live = [sp("p")];
+s = reconcile(s, live);
+assert.deepEqual(view(s, live), ["0:p", "1x:c", "2x:g"]);
+live = [sp("o")];
+s = reconcile(s, live);
+assert.deepEqual(view(s, live), ["0:o"]);
+assert.equal(s.entries.length, 1);
+
+// A pinned closed parent keeps its closed children too.
+live = [sp("p"), sp("c")];
+s = togglePin(setParent(reconcile(EMPTY, live), "c", "p"), "p");
+live = [sp("o")];
+s = reconcile(s, live);
+assert.deepEqual(view(s, live), ["0x:p", "1x:c", "0:o"]);
+
+// A worktree child remembers its automatic parent, so it stays nested once closed.
+live = [sp("m"), sp("w")];
+s = rememberAutoParents(reconcile(EMPTY, live), { w: "m" }, new Set(["m", "w"]));
+assert.equal(s.entries.find((e) => e.id === "w").autoParent, "m");
+assert.equal(rememberAutoParents(s, { w: "m" }, new Set(["m", "w"])), s);
+// Unknown git keeps what was remembered; known and not nested clears it.
+assert.equal(rememberAutoParents(s, {}, new Set(["m"])), s);
+assert.equal(rememberAutoParents(s, {}, new Set(["w"])).entries.find((e) => e.id === "w").autoParent, null);
+live = [sp("m")];
+s = reconcile(s, live);
+assert.deepEqual(view(s, live), ["0:m", "1x:w"]);
+
+// A child closed on purpose leaves even under an open parent; a pin still keeps it.
+live = [sp("p"), sp("c"), sp("d")];
+s = togglePin(setParent(setParent(reconcile(EMPTY, live), "c", "p"), "d", "p"), "d");
+live = [sp("p")];
+s = reconcile(dismiss(dismiss(reconcile(s, live), "c"), "d"), live);
+assert.deepEqual(view(s, live), ["0:p", "1x:d"]);
+// Opened again, a dismissed entry follows its parent as before.
+live = [sp("p"), sp("d")];
+s = reconcile(s, live);
+assert.equal(s.entries.find((e) => e.id === "d").dismissed, undefined);
+
+// Descendants at any depth, once each.
+assert.deepEqual(descendants([{ id: "p", parent: null }, { id: "c", parent: "p" }, { id: "g", parent: "c" }, { id: "o", parent: null }], "p"), ["c", "g"]);
 
 console.log("tree.check ok");
 

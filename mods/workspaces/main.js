@@ -1,6 +1,7 @@
 // Workspace tree: spaces nested under a parent of your choosing (worktrees nest under
 // their checkout until you pick one), pinned entries that stay listed, closed, after their
-// last tab goes, and a right-click menu (pin, parent, rename, worktrees, close).
+// last tab goes (a child stays the same way while its parent is open; closing the parent
+// from its menu closes its open children), and a right-click menu (pin, parent, rename, worktrees, close).
 // Grouped by machine when more than one is known. After a space's name, the repo
 // its first terminal is in now, only where unusual: branch, ahead/behind. Agent state lives in the agents list, not here. Click to
 // switch (a closed entry opens a new shell where it was), drag to reorder.
@@ -8,7 +9,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { spaces, machines, panes, agents, terminals, knownAgents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
-import { EMPTY, canParent, flatten, reconcile, setColor, setParent, startReopen, toggleFold, togglePin } from "./tree.js";
+import { EMPTY, canParent, descendants, dismiss, flatten, reconcile, rememberAutoParents, setColor, setParent, startReopen, toggleFold, togglePin } from "./tree.js";
 import { PRStatusObserver, prAppearance } from "./pr-status.js";
 
 function find(node, id) {
@@ -120,6 +121,20 @@ function reopen(state, entry) {
   if (entry.named) args.name = entry.name;
   setShared("workspace.tree", startReopen(state, entry.id));
   run("space.new", args);
+}
+
+// Close asks the person as usual. Once the space is really gone (syncTree's closeDone), it
+// leaves the tree even under an open parent (only a space that ran out of terminals stays
+// there), and the open spaces under it close too. A cancelled close changes nothing.
+const CLOSING_MS = 10 * 60 * 1000;
+function closeWithChildren(state, entry, space) {
+  const rows = shared("workspace.rows") ?? [];
+  const under = new Set(descendants(rows, entry.id));
+  const open = new Set(spaces().map((s) => s.id));
+  const close = state.entries.filter((e) => under.has(e.id) && open.has(e.space)).map((e) => e.space);
+  const pending = (shared("workspace.closing") ?? []).filter((c) => c.space !== space);
+  setShared("workspace.closing", [...pending, { space, entry: entry.id, machine: entry.machine ?? null, close, at: Date.now() }]);
+  run("space.close", { id: space });
 }
 
 // The + buttons open the Add a space dialog (browse / clone / create, on any connected host).
@@ -395,7 +410,7 @@ export default class Spaces extends View {
       ...(menu.space ? [["Root folder…", "folder", () => this.editRoot(menu.space), shared("workspace.roots")?.[menu.space] ? base(shared("workspace.roots")[menu.space]) : ""]] : []),
       ...(menu.git ? [["New worktree", "git-branch", worktree("new")], ["Open worktree", "git-branch", worktree("open")]] : []),
       ...(menu.git === "linked" ? [["Remove worktree", "git-branch", worktree("remove")]] : []),
-      ...(menu.space ? [["Close", "x", () => { closeOverlay(props().overlay); run("space.close", { id: menu.space }); }]] : []),
+      ...(menu.space ? [["Close", "x", () => { closeOverlay(props().overlay); closeWithChildren(state, entry, menu.space); }]] : []),
     ];
   }
 
@@ -501,6 +516,23 @@ export default class Spaces extends View {
     };
     this.tree = reconcile(saved, live, readable);
     if (JSON.stringify(this.tree) !== JSON.stringify(saved)) setShared("workspace.tree", this.tree);
+    this.closeDone(readable);
+  }
+
+  // Spaces closed from the menu (closeWithChildren) that are gone now.
+  closeDone(readable) {
+    const pending = shared("workspace.closing") ?? [];
+    if (!pending.length) return;
+    const ids = new Set(spaces().map((s) => s.id));
+    const now = Date.now();
+    const done = pending.filter((c) => now - c.at <= CLOSING_MS && readable(c.machine ?? null) && !ids.has(c.space));
+    const left = pending.filter((c) => now - c.at <= CLOSING_MS && !done.includes(c));
+    if (left.length !== pending.length) setShared("workspace.closing", left);
+    if (!done.length) return;
+    let tree = this.tree;
+    for (const c of done) tree = dismiss(tree, c.entry);
+    if (tree !== this.tree) setShared("workspace.tree", (this.tree = tree));
+    for (const c of done) for (const id of c.close) if (ids.has(id)) run("space.close", { id, confirmed: true });
   }
 
   // Rows in display order: the saved tree, a worktree under its checkout unless a parent
@@ -520,6 +552,10 @@ export default class Spaces extends View {
       const a = entryOf(r.w.id), b = host && entryOf(host.w.id);
       if (a && b) auto[a.id] = b.id;
     }
+    // Remembered so a closed worktree stays under its checkout (only where git answered).
+    const known = new Set(list.filter((r) => where(r.w, ps) in this.git && !this.unsure.has(where(r.w, ps))).map((r) => entryOf(r.w.id)?.id).filter(Boolean));
+    const remembered = rememberAutoParents(this.tree, auto, known);
+    if (remembered !== this.tree) setShared("workspace.tree", (this.tree = remembered));
     const byId = new Map(list.map((r) => [r.w.id, r]));
     const live = new Set(sp.map((w) => w.id));
     const rows = flatten(this.tree, live, auto)
@@ -531,7 +567,7 @@ export default class Spaces extends View {
     // Agents own their fold state: publish complete hierarchy, not only visible rows.
     const expanded = { ...this.tree, entries: this.tree.entries.map(e => ({ ...e, folded: false })) };
     const published = flatten(expanded, live, auto).map(({ entry, depth, closed }) => ({
-      id: entry.id, space: entry.space, parent: entry.manual ? entry.parent : (auto[entry.id] ?? entry.parent),
+      id: entry.id, space: entry.space, parent: entry.manual ? entry.parent : (auto[entry.id] ?? entry.autoParent ?? entry.parent),
       depth, name: entry.name, machine: entry.machine, closed,
     }));
     if (JSON.stringify(shared("workspace.rows")) !== JSON.stringify(published)) setShared("workspace.rows", published);
@@ -719,9 +755,8 @@ export default class Spaces extends View {
   }
 
   // One button, two states: moon puts the space's programs to sleep (hibernate mod), sun wakes them.
-  // Remote spaces can't sleep. Shown while asleep, otherwise on hover or when the space is selected.
+  // Shown while asleep, otherwise on hover or when the space is selected.
   sleepToggle(w, asleep, t) {
-    if (w.machine) return div();
     return div().id(`sleep-${w.id}`).flex_none().p(2).rounded(4).hover(s => s.bg(t.hover).text_color(t.foreground))
       .text_color(asleep ? t.accent : t.dim)
       .tooltip(asleep ? "Wake: resume its programs" : "Sleep: stop its programs, keep the shells")

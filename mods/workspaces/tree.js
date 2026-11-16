@@ -1,5 +1,5 @@
 // Workspace tree state kept in shared("workspace.tree"):
-// { entries: [{ id, space, parent, manual, pinned, folded, color, name, named, folder, machine }],
+// { entries: [{ id, space, parent, manual, autoParent, dismissed, pinned, folded, color, name, named, folder, machine }],
 //   reopen: { id, at } | null }
 // `space` is the core space id; an entry whose space is not live is "closed".
 // Pure functions only: callers write results with setShared.
@@ -8,6 +8,30 @@ export const EMPTY = { entries: [], reopen: null };
 const REOPEN_MS = 10000;
 
 const live = (entry, ids) => ids.has(entry.space);
+
+// A manual parent, else the worktree parent last seen while the space was open
+// (`autoParent`): a closed space has no git to nest it by any more.
+const storedParent = (entry) => (entry.manual ? entry.parent : (entry.autoParent ?? entry.parent));
+
+// Is a closed entry kept? Pinned, or under a parent that is open or kept itself:
+// a child follows its parent, as if pinned while the parent stays, unless the person
+// closed it on purpose (`dismissed`).
+function keeper(entries, ids, parentOf = storedParent) {
+	const byId = new Map(entries.map((entry) => [entry.id, entry]));
+	const memo = new Map();
+	const kept = (entry, path = new Set()) => {
+		if (memo.has(entry.id)) return memo.get(entry.id);
+		if (path.has(entry.id)) return false;
+		path.add(entry.id);
+		const parent = byId.get(parentOf(entry));
+		const followsParent = !entry.dismissed && Boolean(parent) && parent.id !== entry.id && kept(parent, path);
+		const result = live(entry, ids) || Boolean(entry.pinned) || followsParent;
+		path.delete(entry.id);
+		memo.set(entry.id, result);
+		return result;
+	};
+	return kept;
+}
 
 // Sync entries with live spaces. `spaces`: [{ id, name, named, folder, machine }].
 // Spaces absent from the list never prune anything while the list is empty
@@ -51,16 +75,17 @@ export function reconcile(state, spaces, readable = () => true, now = Date.now()
 	}
 	for (const space of spaces) {
 		const info = { name: space.name, named: space.named, folder: space.folder, machine: space.machine ?? null };
-		for (const entry of entries) if (entry.space === space.id) Object.assign(entry, info);
+		for (const entry of entries) if (entry.space === space.id) Object.assign(entry, info), delete entry.dismissed;
 	}
-	// Drop unpinned closed leaves; every ancestor of a retained entry stays.
+	// Drop closed leaves nothing keeps (pin, an open parent); every ancestor of a retained entry stays.
+	const kept = keeper(entries, ids);
 	let removed;
 	do {
 		removed = false;
 		for (let index = entries.length - 1; index >= 0; index--) {
 			const entry = entries[index];
-			if (live(entry, ids) || entry.pinned || !isReadable(readable, entry.machine)) continue;
-			if (entries.some((child) => child.parent === entry.id)) continue;
+			if (kept(entry) || !isReadable(readable, entry.machine)) continue;
+			if (entries.some((child) => storedParent(child) === entry.id)) continue;
 			entries.splice(index, 1);
 			removed = true;
 		}
@@ -101,14 +126,45 @@ export function setParent(state, id, parent) {
 
 export const startReopen = (state, id, now = Date.now()) => ({ ...state, reopen: { id, at: now } });
 
+// The person closed this entry's space on purpose: it no longer stays under its parent
+// (a pin still keeps it). Open again, it follows its parent as before (see reconcile).
+export const dismiss = (state, id) => (state.entries.some((entry) => entry.id === id) ? update(state, id, { dismissed: true }) : state);
+
+// Remember each open entry's worktree parent, so it stays nested once closed.
+// `automatic`: { entryId: parentEntryId }; `known`: entry ids whose git is known
+// (an unknown one keeps what was remembered). The same state when nothing changed.
+export function rememberAutoParents(state, automatic, known) {
+	let changed = false;
+	const entries = state.entries.map((entry) => {
+		if (entry.manual || !known.has(entry.id)) return entry;
+		const autoParent = automatic[entry.id] ?? null;
+		if ((entry.autoParent ?? null) === autoParent) return entry;
+		changed = true;
+		return { ...entry, autoParent };
+	});
+	return changed ? { ...state, entries } : state;
+}
+
+// Entry ids under `id`, at any depth. `rows`: [{ id, parent }].
+export function descendants(rows, id) {
+	const out = [];
+	const seen = new Set([id]);
+	for (let i = -1; i < out.length; i++) {
+		const of = i < 0 ? id : out[i];
+		for (const row of rows) if (row.parent === of && !seen.has(row.id)) seen.add(row.id), out.push(row.id);
+	}
+	return out;
+}
+
 
 // Rows in display order. `liveIds`: Set of core space ids that exist now. `automatic`:
 // { entryId: parentEntryId } (git worktree nesting), overridden by a manual choice.
-// Closed entries show when pinned or when they hold a shown entry.
+// Closed entries show when kept (pinned, an open parent) or when they hold a shown entry.
 export function flatten(state, liveIds, automatic = {}) {
 	const { entries } = state;
 	const ids = liveIds;
-	const parentOf = (entry) => (entry.manual ? entry.parent : (automatic[entry.id] ?? entry.parent));
+	const parentOf = (entry) => (entry.manual ? entry.parent : (automatic[entry.id] ?? storedParent(entry)));
+	const kept = keeper(entries, ids, parentOf);
 	const known = new Set(entries.map((entry) => entry.id));
 	const kids = new Map(entries.map((entry) => [entry.id, []]));
 	for (const entry of entries) {
@@ -120,7 +176,7 @@ export function flatten(state, liveIds, automatic = {}) {
 		if (shown.has(entry.id)) return shown.get(entry.id);
 		if (path.has(entry.id)) return false;
 		path.add(entry.id);
-		const result = live(entry, ids) || entry.pinned || kids.get(entry.id).some((kid) => visible(kid, path));
+		const result = kept(entry) || kids.get(entry.id).some((kid) => visible(kid, path));
 		path.delete(entry.id);
 		shown.set(entry.id, result);
 		return result;
