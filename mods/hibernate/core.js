@@ -5,6 +5,21 @@ const SHELLS = new Set(["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh", "csh
 const base = (s) => String(s ?? "").split("/").pop().replace(/^-/, "");
 const isShell = (s) => SHELLS.has(base(s));
 
+// The machine a terminal runs on: "vps/t7" -> "vps", "t7" -> null (this computer).
+// Processes and files of a terminal are looked at there (exec/readTextFile `on`).
+export const machineOf = (address) => (String(address).includes("/") ? String(address).split("/")[0] : null);
+
+const homes = new Map();
+async function homeOn(on) {
+  if (!on) return home();
+  if (!homes.has(on)) {
+    const r = await exec("sh", ["-c", 'printf %s "$HOME"'], { on }).catch(() => null);
+    if (r?.code !== 0 || !r.stdout) return null;
+    homes.set(on, r.stdout);
+  }
+  return homes.get(on);
+}
+
 export async function get(address) {
   const r = await hc(["get", "--json", address]).catch(() => null);
   if (!r || r.code !== 0) return null;
@@ -45,8 +60,9 @@ function kind(g, f) {
   return "program";
 }
 
-async function claudeSession(pid) {
-  const text = await readTextFile(`${home()}/.claude/sessions/${pid}.json`).catch(() => null);
+async function claudeSession(pid, on) {
+  const dir = await homeOn(on);
+  const text = dir ? await readTextFile(`${dir}/.claude/sessions/${pid}.json`, { on }).catch(() => null) : null;
   try {
     return text ? JSON.parse(text).sessionId ?? null : null;
   } catch {
@@ -55,17 +71,17 @@ async function claudeSession(pid) {
 }
 
 // Codex keeps its rollout file open; its name ends with the session id.
-async function codexSession(pid) {
-  const kids = await exec("pgrep", ["-P", String(pid)]).catch(() => null);
+async function codexSession(pid, on) {
+  const kids = await exec("pgrep", ["-P", String(pid)], { on }).catch(() => null);
   const pids = [String(pid), ...(kids?.stdout ?? "").split(/\s+/).filter(Boolean)];
-  const r = await exec("lsof", ["-p", pids.join(","), "-Fn"]).catch(() => null);
+  const r = await exec("lsof", ["-p", pids.join(","), "-Fn"], { on }).catch(() => null);
   const m = (r?.stdout ?? "").match(/rollout-[^\n]*?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl/);
   return m ? m[1] : null;
 }
 
 // omp keeps its session .jsonl open; its name ends with the session id.
-async function ompSession(pid) {
-  const r = await exec("lsof", ["-p", String(pid), "-Fn"]).catch(() => null);
+async function ompSession(pid, on) {
+  const r = await exec("lsof", ["-p", String(pid), "-Fn"], { on }).catch(() => null);
   const m = (r?.stdout ?? "").match(/\.omp\/agent\/sessions\/[^\n]*_([0-9a-f-]{36})\.jsonl/);
   return m ? m[1] : null;
 }
@@ -80,7 +96,8 @@ export async function describe(g, sessions = null) {
   const cacheKey = `${g.address}:${f.pid}`;
   let session = sessions?.get(cacheKey) ?? null;
   if (!session) {
-    session = k === "claude" ? await claudeSession(f.pid) : k === "codex" ? await codexSession(f.pid) : k === "omp" ? await ompSession(f.pid) : null;
+    const on = machineOf(g.address);
+    session = k === "claude" ? await claudeSession(f.pid, on) : k === "codex" ? await codexSession(f.pid, on) : k === "omp" ? await ompSession(f.pid, on) : null;
     if (session && sessions) sessions.set(cacheKey, session);
   }
   return {
@@ -154,8 +171,9 @@ async function term(address) {
   const g = await get(address);
   const f = program(g);
   if (!f || f.pid === g.pid) return;
-  const r = await exec("kill", ["-TERM", `-${f.pid}`]).catch(() => null);
-  if (r?.code !== 0) await exec("kill", ["-TERM", String(f.pid)]).catch(() => null);
+  const on = machineOf(address);
+  const r = await exec("kill", ["-TERM", `-${f.pid}`], { on }).catch(() => null);
+  if (r?.code !== 0) await exec("kill", ["-TERM", String(f.pid)], { on }).catch(() => null);
 }
 
 // Stops what runs in a terminal and leaves its shell in place.
@@ -170,8 +188,9 @@ export async function stop(cx, e) {
   const g = await get(e.address);
   const f = program(g);
   if (f && f.pid !== g.pid) {
-    const r = await exec("kill", ["-KILL", `-${f.pid}`]).catch(() => null);
-    if (r?.code !== 0) await exec("kill", ["-KILL", String(f.pid)]).catch(() => null);
+    const on = machineOf(e.address);
+    const r = await exec("kill", ["-KILL", `-${f.pid}`], { on }).catch(() => null);
+    if (r?.code !== 0) await exec("kill", ["-KILL", String(f.pid)], { on }).catch(() => null);
   }
   return waitIdle(cx, e.address, 3000);
 }

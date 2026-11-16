@@ -1,10 +1,11 @@
-// hibernate: sleep/wake a space's programs (shells stay) and offer to resume after a reboot
+// hibernate: sleep/wake a space's programs (shells stay), on this computer or another machine,
+// and offer to resume this computer's after a reboot
 // or core loss. Docked in a 0px block; as an overlay (props.view) it draws its dialogs.
 
 import { View, div } from "gpui-kit";
 import { spaces, machines, shared, setShared, notify, openOverlay, closeOverlay, appHome, props, focused, nextCommand, exec, readTextFile, writeTextFile } from "herdr";
 import * as fs from "fs/promises";
-import { get, list, describe, idleShell, program, start, stop, commandLine } from "./core.js";
+import { get, list, describe, idleShell, program, start, stop, commandLine, machineOf } from "./core.js";
 import { SleepDialog, ResumeDialog } from "./ui.js";
 import { loadSettings } from "./settings.js";
 
@@ -14,7 +15,9 @@ const LOST_GRACE = 15 * 60 * 1000;
 const local = (address) => !String(address).includes("/");
 // mod.json `settings` (Mod settings, mod.schema.json): when sleeping spaces wake, and what a restart does.
 const DEFAULTS = { wake: "manual", after_restart: "ask" };
-const localReady = () => machines().find((m) => m.name === null)?.layout === "ready";
+const ready = (machine) => machines().find((m) => m.name === (machine ?? null))?.layout === "ready";
+// A space id's machine: "vps/sp1" -> "vps", "sp1" -> null (this computer).
+const spaceMachine = (id) => machineOf(id);
 // Any program that isn't an idle agent may hold unsaved work (vim, a build), so it asks first.
 const busy = (e) => !e.parent && (e.kind === "program" || e.status === "working" || e.status === "blocked");
 
@@ -91,11 +94,14 @@ export default class Hibernate extends View {
       this.lastSpace = cur;
       if (this.settings.wake === "open" && cur && this.state.sleeping[cur]) this.enqueue(cx, () => this.wake(cur));
     }
-    // "wake": "start": once this Mac's spaces are loaded after Herdr starts.
-    if (this.wakeAll && localReady()) {
-      this.wakeAll = false;
+    // "wake": "start": each sleeping space once its machine's spaces are loaded after Herdr starts.
+    if (this.wakeAll?.size) {
       const ids = new Set(spaces().map((s) => s.id));
-      for (const id of Object.keys(this.state.sleeping)) if (ids.has(id)) this.enqueue(cx, () => this.wake(id));
+      for (const id of [...this.wakeAll]) {
+        if (!ready(spaceMachine(id))) continue;
+        this.wakeAll.delete(id);
+        if (ids.has(id)) this.enqueue(cx, () => this.wake(id));
+      }
     }
     const r = shared("hibernate.request");
     if (r && r.nonce !== this.seen) {
@@ -118,7 +124,7 @@ export default class Hibernate extends View {
     if (!launch || launch === this.state.launch) return;
     this.state.launch = launch;
     await this.save();
-    if (this.settings.wake === "start" && Object.keys(this.state.sleeping).length) this.wakeAll = true;
+    if (this.settings.wake === "start") this.wakeAll = new Set(Object.keys(this.state.sleeping));
   }
 
   // Changes one setting in mod.json; Herdr then reloads this mod with it.
@@ -164,21 +170,27 @@ export default class Hibernate extends View {
     if (JSON.stringify(v) !== JSON.stringify(shared("hibernate.sleeping") ?? {})) setShared("hibernate.sleeping", v);
   }
 
-  // Every local terminal belonging to a space, with sub-agents of those.
+  // Every terminal belonging to a space on its machine, with sub-agents of those.
+  // Labels carry ids local to that machine: the app's "vps/sp1" is "sp1" there.
   async spaceTerminals(space) {
-    const tabs = new Set(space.tabs.map((t) => t.id));
-    const all = (await Promise.all(((await list()) ?? []).filter((t) => local(t.address)).map((t) => get(t.address)))).filter(Boolean);
-    const mine = new Set(all.filter((g) => g.labels?.["herdr.space"] === space.id || tabs.has(g.labels?.["herdr.tab"])).map((g) => g.address));
+    const m = space.machine ?? null;
+    const bare = (id) => (m ? String(id).slice(m.length + 1) : id);
+    const there = (address) => (m ? String(address).startsWith(`${m}/`) : local(address));
+    const qualified = (address) => (m && address && !String(address).includes("/") ? `${m}/${address}` : address);
+    const tabs = new Set(space.tabs.map((t) => bare(t.id)));
+    const all = (await Promise.all(((await list()) ?? []).filter((t) => there(t.address)).map((t) => get(t.address)))).filter(Boolean);
+    const mine = new Set(all.filter((g) => g.labels?.["herdr.space"] === bare(space.id) || tabs.has(g.labels?.["herdr.tab"])).map((g) => g.address));
     for (let grew = true; grew; ) {
       grew = false;
-      for (const g of all) if (g.parent && mine.has(g.parent) && !mine.has(g.address)) mine.add(g.address), (grew = true);
+      for (const g of all) if (g.parent && mine.has(qualified(g.parent)) && !mine.has(g.address)) mine.add(g.address), (grew = true);
     }
     return all.filter((g) => mine.has(g.address));
   }
 
   async sleep(cx, id, confirmed) {
     const space = spaces().find((s) => s.id === id);
-    if (!space || space.machine || !local(id)) return notify({ title: "Sleep works on this Mac's spaces only", level: "warning" });
+    if (!space) return;
+    if (space.machine && !ready(space.machine)) return notify({ title: `${space.machine} isn't reachable`, body: "Sleep needs its machine connected.", level: "warning" });
     if (this.state.sleeping[id]) return;
     const entries = (await Promise.all((await this.spaceTerminals(space)).map((g) => describe(g, this.sessions)))).filter(Boolean);
     if (!entries.some((e) => !e.parent)) return notify({ title: `Nothing running in ${space.name}`, level: "info" });
@@ -222,13 +234,12 @@ export default class Hibernate extends View {
   // Rolling snapshot, and loss detection: a recovered terminal keeps its address
   // but gets a new shell pid; a program exited on purpose leaves the same shell.
   async pass(_cx) {
-    const localReady = machines().find((m) => m.name === null)?.layout === "ready";
-    if (localReady) {
-      const ids = new Set(spaces().map((s) => s.id));
-      let pruned = false;
-      for (const id of Object.keys(this.state.sleeping)) if (!ids.has(id)) delete this.state.sleeping[id], (pruned = true);
-      if (pruned) await this.save(), this.publish();
-    }
+    // A sleeping space that closed is forgotten, but only when its machine's spaces are known:
+    // a machine that is away is not "no spaces".
+    const ids = new Set(spaces().map((s) => s.id));
+    let pruned = false;
+    for (const id of Object.keys(this.state.sleeping)) if (ready(spaceMachine(id)) && !ids.has(id)) delete this.state.sleeping[id], (pruned = true);
+    if (pruned) await this.save(), this.publish();
     const terminals = await list();
     if (!terminals) return; // the core is away: keep the last snapshot for when it's back
     const live = (await Promise.all(terminals.filter((t) => local(t.address)).map((t) => get(t.address)))).filter(Boolean);
