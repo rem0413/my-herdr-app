@@ -30,6 +30,8 @@ const SVG = /\.svg$/i;
 const PDF = /\.pdf$/i;
 const MARKDOWN = /\.(md|markdown|mdx)$/i;
 const CSV_MAX_ROWS = 5000;
+const ANIM_SPEEDS = [0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
+const ANIM_BAR = 40;            // px under an animation for its play / scrub / speed controls
 const FRAME_PIXELS_MAX = 400e6;  // width × height × frames written as PNG; longer animations stop early
 const FRAMES_MAX = 1000;
 const CACHE = "data/file-editor";
@@ -372,7 +374,7 @@ else c=$?; rm -f "$3.part" "$3.cancel"; exit $c; fi`, "fetch", this.on, this.fil
     // Closed or reloaded meanwhile: unstage already ran, so drop the frames written after it.
     if (this.staged !== staged) return exec("sh", ["-c", 'rm -f "$1"-f*.png', "frames", `${appHome()}/${staged}`]).catch(() => null);
     if (!(out?.delays?.length > 1)) return;
-    this.anim = { frames: out.delays.map((_, i) => `${staged}-f${i}.png`), delays: out.delays, count: out.count, i: 0, playing: true };
+    this.anim = { frames: out.delays.map((_, i) => `${staged}-f${i}.png`), delays: out.delays, count: out.count, i: 0, playing: true, speed: 1 };
     this.animate(cx);
   }
 
@@ -386,10 +388,12 @@ else c=$?; rm -f "$3.part" "$3.cancel"; exit $c; fi`, "fetch", this.on, this.fil
       if (this.anim !== a || !a.playing) return;
       const visible = shown();
       if (visible) { a.i = (a.i + 1) % a.frames.length; cx.notify(); }
-      this.animTask = cx.timer.after(visible ? Math.max(20, a.delays[a.i]) : 500, tick);
+      this.animTask = cx.timer.after(visible ? this.frameDelay(a) : 500, tick);
     };
-    this.animTask = cx.timer.after(Math.max(20, a.delays[a.i]), tick);
+    this.animTask = cx.timer.after(this.frameDelay(a), tick);
   }
+
+  frameDelay(a) { return Math.max(20, a.delays[a.i] / a.speed); }
 
   toggleAnim(cx) {
     if (!this.anim) return;
@@ -403,6 +407,33 @@ else c=$?; rm -f "$3.part" "$3.cancel"; exit $c; fi`, "fetch", this.on, this.fil
     if (!a) return;
     a.playing = false; this.animTask?.cancel();
     a.i = (a.i + by + a.frames.length) % a.frames.length;
+    cx.notify();
+  }
+
+  // Scrubbing pauses on that frame; a press that started while playing resumes on release.
+  seekFrame(frac, cx) {
+    const a = this.anim;
+    if (!a) return;
+    if (!this.scrub) this.scrub = { resume: a.playing };
+    a.playing = false; this.animTask?.cancel();
+    const i = Math.min(a.frames.length - 1, Math.floor(frac * a.frames.length));
+    if (i !== a.i) { a.i = i; cx.notify(); }
+  }
+
+  endScrub(cx) {
+    const resume = this.scrub?.resume;
+    this.scrub = null;
+    if (resume && this.anim) { this.anim.playing = true; this.animate(cx); cx.notify(); }
+  }
+
+  setSpeed(by, cx) {
+    const a = this.anim;
+    if (!a) return;
+    const at = ANIM_SPEEDS.indexOf(a.speed);
+    const next = ANIM_SPEEDS[Math.min(ANIM_SPEEDS.length - 1, Math.max(0, at + by))];
+    if (next === a.speed) return;
+    a.speed = next;
+    this.animate(cx);
     cx.notify();
   }
 
@@ -563,7 +594,7 @@ else c=$?; rm -f "$3.part" "$3.cancel"; exit $c; fi`, "fetch", this.on, this.fil
   scale() {
     if (this.zoom !== "fit") return this.zoom;
     if (!this.dims || !this.view) return 1;
-    const fit = Math.min(this.view.width / this.dims.w, this.view.height / this.dims.h);
+    const fit = Math.min(this.view.width / this.dims.w, Math.max(1, this.view.height - (this.anim ? ANIM_BAR : 0)) / this.dims.h);
     return SVG.test(this.file) ? fit : Math.min(1, fit); // a raster never blows up past its pixels to fit
   }
 
@@ -668,9 +699,6 @@ else c=$?; rm -f "$3.part" "$3.cancel"; exit $c; fi`, "fetch", this.on, this.fil
         .child(csv ? seg("fe-preview", "table.svg", "Table", "preview") : seg("fe-preview", "eye.svg", "Preview", "preview"))
         .child(seg("fe-code", "code.svg", "Code", "code"))))
       .when(HTML.test(this.file) && !this.on, (el) => el.child(this.button(t, "fe-browser", "external.svg", "Open in browser", () => openExternal(this.file))))
-      .when(Boolean(anim), (el) => el
-        .child(this.button(t, "fe-anim", anim.playing ? "pause.svg" : "play.svg", anim.playing ? "Pause (Space)" : "Play (Space)", (cx) => this.toggleAnim(cx)))
-        .child(div().w(56).flex_none().text_center().text_color(t.muted).child(`${anim.i + 1} / ${anim.frames.length}`)))
       .when(pdf && Boolean(this.pages), (el) => el
         .child(this.button(t, "fe-prev", "‹", "Previous page (← / Page Up)", (cx) => this.goPage(this.page - 1, cx), { disabled: this.page <= 1 }))
         .child(div().flex_none().px(4).text_color(t.muted).child(`${this.page} / ${this.pages}`))
@@ -704,9 +732,43 @@ else c=$?; rm -f "$3.part" "$3.cancel"; exit $c; fi`, "fetch", this.on, this.fil
       cx.stop_propagation();
       this.step(e.delta.y > 0 ? 1 : -1, cx);
     };
-    return this.zoom === "fit"
+    const area = this.zoom === "fit"
       ? div().id("fe-pic").flex_1().min_h(0).p(10).flex().items_center().justify_center().overflow_hidden().on_scroll_wheel(wheel).child(pic)
       : div().id("fe-pic").flex_1().min_h(0).p(10).overflow_scroll().on_scroll_wheel(wheel).child(pic);
+    return a ? v_flex().flex_1().min_h(0).child(area).child(this.animBar(t, a)) : area;
+  }
+
+  // Play/pause, a frame scrubber (press and drag), the frame and its time, and the playback speed.
+  animBar(t, a) {
+    const n = a.frames.length;
+    const at = a.delays.slice(0, a.i).reduce((s, d) => s + d, 0), total = a.delays.reduce((s, d) => s + d, 0);
+    const pick = (e, cx) => {
+      const width = e.bounds?.width, x = e.local_position?.x;
+      if (width > 0 && x != null) this.seekFrame(Math.min(0.9999, Math.max(0, x / width)), cx);
+    };
+    const thumb = n > 1 ? a.i / (n - 1) : 0;
+    const scrubber = div().id("fe-scrub").flex_1().min_w(0).h(24).flex().items_center().cursor_pointer()
+      .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); pick(e, cx); })
+      .on_mouse_move((e, cx) => { if (this.scrub) pick(e, cx); })
+      .on_mouse_up("left", (_e, cx) => this.endScrub(cx))
+      .on_hover((hovered, cx) => { if (!hovered && this.scrub) this.endScrub(cx); })
+      .child(div().w_full().h(4).rounded(2).bg(t.border).relative()
+        .child(div().h_full().rounded(2).bg(t.accent).relative().w(`${(thumb * 100).toFixed(2)}%`)
+          .child(div().absolute().top(-4).right(-6).size(12).rounded_full().bg(t.accent).border_2().border_color(t.background))));
+    const sec = (ms) => `${(ms / 1000).toFixed(2)}s`;
+    return h_flex().id("fe-anim-bar").h(ANIM_BAR).flex_none().px(10).gap(8).items_center().border_t(1).border_color(t.border)
+      .bg(t.surface).text_size(11).text_color(t.muted)
+      .child(this.button(t, "fe-anim", a.playing ? "pause.svg" : "play.svg", a.playing ? "Pause (Space)" : "Play (Space)", (cx) => this.toggleAnim(cx)))
+      .child(this.button(t, "fe-fprev", "‹", "Previous frame (←)", (cx) => this.stepFrame(-1, cx)))
+      .child(this.button(t, "fe-fnext", "›", "Next frame (→)", (cx) => this.stepFrame(1, cx)))
+      .child(div().w(72).flex_none().text_center().child(`${a.i + 1} / ${n}`))
+      .child(scrubber)
+      .child(div().w(96).flex_none().text_center().text_color(t.dim).child(`${sec(at)} / ${sec(total)}`))
+      .child(this.button(t, "fe-slower", "−", "Slower ([)", (cx) => this.setSpeed(-1, cx), { disabled: a.speed <= ANIM_SPEEDS[0] }))
+      .child(div().id("fe-speed").w(40).flex_none().text_center().cursor_pointer().tooltip("Reset speed")
+        .text_color(a.speed === 1 ? t.muted : t.accent).on_click((_e, cx) => { a.speed = 1; this.animate(cx); cx.notify(); })
+        .child(`${a.speed}×`))
+      .child(this.button(t, "fe-faster", "+", "Faster (])", (cx) => this.setSpeed(1, cx), { disabled: a.speed >= ANIM_SPEEDS[ANIM_SPEEDS.length - 1] }));
   }
 
   // A seek or volume bar: a press anywhere sets that fraction.
@@ -809,8 +871,10 @@ else c=$?; rm -f "$3.part" "$3.cancel"; exit $c; fi`, "fetch", this.on, this.fil
           else this.seekAudio(this.audioPos() + (e.keystroke === "left" ? -5 : 5), cx);
           cx.stop_propagation();
         }
-        else if (this.anim && ["space", "left", "right"].includes(e.keystroke)) {
-          if (e.keystroke === "space") this.toggleAnim(cx); else this.stepFrame(e.keystroke === "left" ? -1 : 1, cx);
+        else if (this.anim && ["space", "left", "right", "[", "]"].includes(e.keystroke)) {
+          if (e.keystroke === "space") this.toggleAnim(cx);
+          else if (e.keystroke === "[" || e.keystroke === "]") this.setSpeed(e.keystroke === "[" ? -1 : 1, cx);
+          else this.stepFrame(e.keystroke === "left" ? -1 : 1, cx);
           cx.stop_propagation();
         }
       })
