@@ -357,7 +357,15 @@ export default class Files extends View {
 
   // ---- drop, jobs
 
+  // Herdr delivers a row's drag only to terminals; other mods (the Spaces sidebar) see the
+  // pointer but not the paths, so the row being dragged is published here for them.
+  armDrag(path, dir) {
+    setShared("files.drag", { path, dir, on: this.on, at: Date.now() });
+  }
+
   drop(paths, cx) {
+    // A row dragged out of this tree and released over it again: already here, nothing to copy.
+    paths = paths?.filter(p => p !== this.root && !p.startsWith(this.root + "/"));
     if (!paths?.length || !this.root) return;
     const folder = this.root, on = this.on;
     cx.spawn(async cx => {
@@ -471,6 +479,8 @@ export default class Files extends View {
       .when(active, el => el.bg(t.selected))
       .on_click((e, cx) => entry.dir ? this.toggle(path, cx) : this.openRel(path, e.click_count >= 2))
       .on_mouse_down("right", this.rowMenu(path, entry.dir))
+      .drag_paths([abs], { on: this.on })
+      .on_mouse_down("left", () => this.armDrag(abs, entry.dir))
       .child(entry.dir ? svg(`${ME}/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
       .child(icon.tint ? svg(icon.path).size(15).flex_none().text_color(entry.ignored ? t.dim : icon.color ?? t.muted)
         : image(icon.path).size(15).flex_none().when(entry.ignored, el => el.opacity(0.5)))
@@ -486,6 +496,8 @@ export default class Files extends View {
       .when(active, el => el.bg(t.selected))
       .on_click((e) => this.openRel(rel, e.click_count >= 2))
       .on_mouse_down("right", this.rowMenu(rel, false))
+      .drag_paths([`${this.root}/${rel}`], { on: this.on })
+      .on_mouse_down("left", () => this.armDrag(`${this.root}/${rel}`, false))
       .child(icon.tint ? svg(icon.path).size(15).flex_none().text_color(icon.color ?? t.muted) : image(icon.path).size(15).flex_none())
       .child(div().flex_none().max_w(220).truncate().text_color(t.foreground).child(name))
       .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(dir));

@@ -47,6 +47,8 @@ const colorDot = (t, key) => div().size(7).rounded(4).flex_none().bg(HEX[key] ??
 const FALLBACK = 60000;
 // A file drag from outside counts as gone once pointer moves stop for this long.
 const DRAG_IDLE_MS = 300;
+// A Files panel row pressed longer ago than this isn't the one being dragged.
+const FILES_DRAG_MS = 60000;
 
 // A space speaks up only when something in it needs you.
 export function glyph(status) {
@@ -972,7 +974,7 @@ export default class Spaces extends View {
     }
     if (changed) setShared("space.colors", kept);
     return v_flex().id("workspaces-root").relative().size_full().min_h(0).bg(t.chrome).text_size(13)
-      .on_hover((over, cx) => { this.pointerOver = over; if (over) this.endFileDrag(cx); })
+      .on_hover((over, cx) => { this.pointerOver = over; if (over && this.fileDrag) this.dropFilesRow(cx); })
       .on_mouse_move((_e, cx) => this.fileDragMove(cx))
       .on_drop((e, cx) => this.dropFolders(e.paths, cx))
       .child(h_flex().h(36).pl(8).pr(10).items_center().justify_between().text_size(11).text_color(t.dim).border_b_1().border_color(t.border)
@@ -988,10 +990,10 @@ export default class Spaces extends View {
       .when(this.fileDrag, el => el.child(div().absolute().inset_0().m(6).rounded(8).border(2).border_dashed()
         .border_color(HEX.ansi2).bg(HEX.ansi2 + "26").flex().items_center().justify_center().p(12)
         .text_size(12).font_medium().text_color(t.foreground)
-        .child(collapsed ? "+" : "Drop folders to add spaces on This computer")));
+        .child(collapsed ? "+" : "Drop folders to add spaces")));
   }
 
-  // Files dragged in from Finder: GPUI sends pointer moves during the drag but no hover,
+  // Files dragged in from Finder or the Files panel: GPUI sends pointer moves during the drag but no hover,
   // so a move while the pointer isn't hovering means a file drag. Moves keep coming while
   // the pointer holds still, so a pause means it left without dropping.
   fileDragMove(cx) {
@@ -1015,7 +1017,19 @@ export default class Spaces extends View {
     cx.notify();
   }
 
-  // Each dropped folder becomes a space on this computer; files are ignored.
+  // A Files panel row never reaches on_drop: its release over the sidebar shows up as the
+  // hover coming back mid-drag. The row it started from is in shared "files.drag"; a Finder
+  // drop already ended the drag in on_drop, before that hover. A folder becomes a space on
+  // its own machine; files are ignored.
+  dropFilesRow(cx) {
+    this.endFileDrag(cx);
+    const drag = shared("files.drag");
+    if (!drag || Date.now() - drag.at > FILES_DRAG_MS) return;
+    setShared("files.drag", null);
+    if (drag.dir) run("space.new", { folder: drag.path, machine: drag.on ?? "" });
+  }
+
+  // Each folder dropped from Finder becomes a space on this computer; files are ignored.
   dropFolders(paths, cx) {
     this.endFileDrag(cx);
     cx.spawn(async () => {
