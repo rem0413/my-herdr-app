@@ -8,10 +8,10 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, machines, panes, agents, terminals, knownAgents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout, checking } from "herdr";
+import { spaces, machines, panes, agents, terminals, knownAgents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout, checking, appHome } from "herdr";
 import { EMPTY, canParent, descendants, dismiss, flatten, reconcile, rememberAutoParents, setColor, setParent, startReopen, toggleFold, togglePin } from "./tree.js";
 import { PRStatusObserver, prAppearance } from "./pr-status.js";
-import { READ, WRITE, applyFile, fileOf, parseFile, treeKey } from "./tree-sync.js";
+import { DIR, READ, WRITE, applyFile, fileOf, parseFile, treeKey } from "./tree-sync.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -187,20 +187,44 @@ export default class Spaces extends View {
     // (spaces, panes and agents redraw it); this timer catches the fallback and new spaces.
     cx.timer.every(1000, (cx) => this.checkNew(cx, true));
     // Each machine's part of the tree lives in a file there (tree-sync.js), shared by
-    // every window that shows its spaces: written soon after a change, read every 4 s.
+    // every window that shows its spaces. Written soon after a change. This computer's
+    // file is read when it changes (watched); other machines' every 4 s while this
+    // window is in front, and at once when it comes back to the front.
     this.treeSync = {}; // machine ("" here) -> { raw, key } last read or written
     this.treeTick = 0;
-    if (!checking()) cx.timer.every(2000, (cx) => this.syncTreeFiles(cx));
+    this.treeLocalDue = true; // this computer's file changed (or isn't watched yet)
+    this.treeWatched = false;
+    this.wasActive = false;
+    if (checking()) return;
+    cx.timer.every(2000, (cx) => this.syncTreeFiles(cx));
+    cx.spawn(async () => this.watchTreeFile());
+  }
+
+  async watchTreeFile() {
+    try {
+      await exec("mkdir", ["-p", `${appHome()}/${DIR}`]);
+      this.treeWatched = true;
+      for (;;) {
+        await watchFolder(`${appHome()}/${DIR}`);
+        this.treeLocalDue = true;
+      }
+    } catch {
+      this.treeWatched = false; // can't watch: read it with the others
+    }
   }
 
   syncTreeFiles(cx) {
     if (this.treeBusy) return;
-    this.treeBusy = true;
-    const read = this.treeTick++ % 2 === 0;
+    const active = Boolean(window()?.active);
+    const remote = active && (this.treeTick++ % 2 === 0 || !this.wasActive);
+    this.wasActive = active;
+    const local = this.treeLocalDue || (!this.treeWatched && remote);
+    this.treeLocalDue = false;
     const list = [null, ...machines().filter((m) => m.name && !m.temporary && m.layout === "ready").map((m) => m.name)];
+    this.treeBusy = true;
     cx.spawn(async () => {
       try {
-        for (const m of list) await this.syncTreeFile(m, read);
+        for (const m of list) await this.syncTreeFile(m, m === null ? local : remote);
       } finally {
         this.treeBusy = false;
       }

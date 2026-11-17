@@ -1,11 +1,13 @@
 // One machine's part of the workspace tree, kept in a file on that machine
-// ($HOME/.config/herdr-app/workspace-tree.json), so every Herdr window showing its
+// ($HOME/.config/herdr-app/workspace-tree/tree.json, alone in its folder so the local
+// window can watch it), so every Herdr window showing its
 // spaces reads and writes the same tree. Folding stays per window.
 // In the file, ids are that machine's own (no "<machine>/" prefix): the machine's own
 // window and a window connected to it from elsewhere read the same file.
 // Pure functions only; main.js does the reading and writing.
 
-export const FILE = "$HOME/.config/herdr-app/workspace-tree.json";
+export const DIR = "workspace-tree"; // under the app home
+export const FILE = `$HOME/.config/herdr-app/${DIR}/tree.json`;
 export const READ = `cat "${FILE}" 2>/dev/null || true`;
 export const WRITE = `f="${FILE}"; mkdir -p "\${f%/*}" && printf '%s' "$1" > "$f.tmp" && mv "$f.tmp" "$f"`;
 
