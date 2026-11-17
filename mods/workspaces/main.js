@@ -198,6 +198,33 @@ export default class Spaces extends View {
     if (checking()) return;
     cx.timer.every(2000, (cx) => this.syncTreeFiles(cx));
     cx.spawn(async () => this.watchTreeFile());
+    this.folderChecked = new Set(); // closed entry id + folder, looked at once
+    cx.timer.every(5000, (cx) => this.dropGoneFolders(cx));
+  }
+
+  // A closed entry whose folder is gone (a removed worktree) can't be reopened: dismiss it,
+  // so it leaves the tree (a pin still keeps it). Asked once per closed entry, on its machine;
+  // only a clear "not a folder" counts, never an unreachable machine.
+  dropGoneFolders(cx) {
+    const live = new Set(spaces().map((s) => s.id));
+    const ready = (m) => (m === null ? true : machines().find((x) => x.name === m)?.layout === "ready");
+    for (const key of this.folderChecked) if (live.has(key.split("\0")[0])) this.folderChecked.delete(key);
+    const tree = shared("workspace.tree") ?? this.tree;
+    const gone = (tree?.entries ?? []).filter((e) => !live.has(e.space) && e.folder && !e.dismissed && ready(e.machine ?? null)
+      && !this.folderChecked.has(`${e.space}\0${e.folder}`));
+    if (!gone.length) return;
+    for (const e of gone) this.folderChecked.add(`${e.space}\0${e.folder}`);
+    cx.spawn(async () => {
+      const missing = [];
+      for (const e of gone) {
+        const r = await exec("test", ["-d", e.folder], { on: e.machine ?? undefined, timeout: 10000 }).catch(() => null);
+        if (r?.code === 1) missing.push(e.id);
+      }
+      if (!missing.length) return;
+      let next = shared("workspace.tree") ?? this.tree;
+      for (const id of missing) next = dismiss(next, id);
+      setShared("workspace.tree", (this.tree = next));
+    });
   }
 
   async watchTreeFile() {
