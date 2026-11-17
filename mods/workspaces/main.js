@@ -45,6 +45,8 @@ const colorDot = (t, key) => div().size(7).rounded(4).flex_none().bg(HEX[key] ??
 // Changes made outside Herdr (an editor's save, a commit in another app): looked
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
+// A file drag from outside counts as gone once pointer moves stop for this long.
+const DRAG_IDLE_MS = 300;
 
 // A space speaks up only when something in it needs you.
 export function glyph(status) {
@@ -969,7 +971,10 @@ export default class Spaces extends View {
       changed = true;
     }
     if (changed) setShared("space.colors", kept);
-    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
+    return v_flex().id("workspaces-root").relative().size_full().min_h(0).bg(t.chrome).text_size(13)
+      .on_hover((over, cx) => { this.pointerOver = over; if (over) this.endFileDrag(cx); })
+      .on_mouse_move((_e, cx) => this.fileDragMove(cx))
+      .on_drop((e, cx) => this.dropFolders(e.paths, cx))
       .child(h_flex().h(36).pl(8).pr(10).items_center().justify_between().text_size(11).text_color(t.dim).border_b_1().border_color(t.border)
         .when(!collapsed, el => el.child(listTabs(t, "spaces", this.agentKeys)))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
@@ -979,6 +984,45 @@ export default class Spaces extends View {
         .on_mouse_up("left", (_e, cx) => { if (this.pressed) this.releaseRoot(cx); })
         .children(this.grouped(t, collapsed)))
       // Last: sits just above the Agents panel below this block.
-      .when(!collapsed, el => el.child(this.tagFilters(t).pt(6).border_t_1().border_color(t.border)));
+      .when(!collapsed, el => el.child(this.tagFilters(t).pt(6).border_t_1().border_color(t.border)))
+      .when(this.fileDrag, el => el.child(div().absolute().inset_0().m(6).rounded(8).border(2).border_dashed()
+        .border_color(HEX.ansi2).bg(HEX.ansi2 + "26").flex().items_center().justify_center().p(12)
+        .text_size(12).font_medium().text_color(t.foreground)
+        .child(collapsed ? "+" : "Drop folders to add spaces on This computer")));
+  }
+
+  // Files dragged in from Finder: GPUI sends pointer moves during the drag but no hover,
+  // so a move while the pointer isn't hovering means a file drag. Moves keep coming while
+  // the pointer holds still, so a pause means it left without dropping.
+  fileDragMove(cx) {
+    if (this.pointerOver || this.pressed !== null) return;
+    this.lastDragMove = Date.now();
+    if (this.fileDrag) return;
+    this.fileDrag = true;
+    cx.notify();
+    const watch = (cx) => cx.timer.after(DRAG_IDLE_MS, (cx) => {
+      if (!this.fileDrag) return;
+      if (Date.now() - this.lastDragMove < DRAG_IDLE_MS) return watch(cx);
+      this.fileDrag = false;
+      cx.notify();
+    });
+    watch(cx);
+  }
+
+  endFileDrag(cx) {
+    if (!this.fileDrag) return;
+    this.fileDrag = false;
+    cx.notify();
+  }
+
+  // Each dropped folder becomes a space on this computer; files are ignored.
+  dropFolders(paths, cx) {
+    this.endFileDrag(cx);
+    cx.spawn(async () => {
+      for (const folder of paths) {
+        const r = await exec("test", ["-d", folder]).catch(() => null);
+        if (r?.code === 0) run("space.new", { folder, machine: "" });
+      }
+    });
   }
 }
