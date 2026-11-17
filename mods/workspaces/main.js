@@ -8,9 +8,10 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, machines, panes, agents, terminals, knownAgents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, agents, terminals, knownAgents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout, checking } from "herdr";
 import { EMPTY, canParent, descendants, dismiss, flatten, reconcile, rememberAutoParents, setColor, setParent, startReopen, toggleFold, togglePin } from "./tree.js";
 import { PRStatusObserver, prAppearance } from "./pr-status.js";
+import { READ, WRITE, applyFile, fileOf, parseFile, treeKey } from "./tree-sync.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -185,6 +186,59 @@ export default class Spaces extends View {
     // only when its answer could have changed (see `due`). Every render looks too
     // (spaces, panes and agents redraw it); this timer catches the fallback and new spaces.
     cx.timer.every(1000, (cx) => this.checkNew(cx, true));
+    // Each machine's part of the tree lives in a file there (tree-sync.js), shared by
+    // every window that shows its spaces: written soon after a change, read every 4 s.
+    this.treeSync = {}; // machine ("" here) -> { raw, key } last read or written
+    this.treeTick = 0;
+    if (!checking()) cx.timer.every(2000, (cx) => this.syncTreeFiles(cx));
+  }
+
+  syncTreeFiles(cx) {
+    if (this.treeBusy) return;
+    this.treeBusy = true;
+    const read = this.treeTick++ % 2 === 0;
+    const list = [null, ...machines().filter((m) => m.name && !m.temporary && m.layout === "ready").map((m) => m.name)];
+    cx.spawn(async () => {
+      try {
+        for (const m of list) await this.syncTreeFile(m, read);
+      } finally {
+        this.treeBusy = false;
+      }
+    });
+  }
+
+  // The file wins when it changed since last time (another window edited it);
+  // otherwise this window's change is written.
+  async syncTreeFile(machine, read) {
+    const slot = machine ?? "";
+    const current = () => fileOf(shared("workspace.tree") ?? EMPTY, shared("workspace.roots"), shared("workspace.tags"), machine);
+    const last = this.treeSync[slot];
+    const dirty = treeKey(current()) !== last?.key;
+    if (last && !dirty && !read) return;
+    let raw;
+    try {
+      const r = await exec("sh", ["-c", READ], { on: machine, timeout: 10000 });
+      if (r.code !== 0) return;
+      raw = r.stdout.trim() || null;
+    } catch {
+      return;
+    }
+    const file = parseFile(raw);
+    if (file && raw !== last?.raw) {
+      const next = applyFile(shared("workspace.tree") ?? EMPTY, shared("workspace.roots"), shared("workspace.tags"), machine, file);
+      const put = (key, value) => { if (JSON.stringify(shared(key) ?? null) !== JSON.stringify(value)) setShared(key, value); };
+      put("workspace.tree", next.tree);
+      put("workspace.roots", next.roots);
+      put("workspace.tags", next.tags);
+      this.treeSync[slot] = { raw, key: treeKey(file) };
+      return;
+    }
+    if (file && !dirty) return;
+    const text = JSON.stringify(current());
+    try {
+      const r = await exec("sh", ["-c", WRITE, "sh", text], { on: machine, timeout: 10000 });
+      if (r.code === 0) this.treeSync[slot] = { raw: text, key: treeKey(JSON.parse(text)) };
+    } catch {}
   }
 
   // `notify`: false from render, which must not ask for another render.
