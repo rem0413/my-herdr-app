@@ -29,8 +29,10 @@ export default class Tabs extends View {
         if (await nextCommand() !== "new") continue;
         const space = spaces().find(p => p.active);
         const first = panes().find(p => p.tab === space?.tabs[0]?.id && p.terminal);
-        // A root set from the space's menu (workspaces: Root folder…) wins.
-        const root = shared("workspace.roots")?.[space?.id];
+        // A root set from the space's menu (workspaces: Root folder…) wins, then a folder the
+        // workspaces sidebar holds for the space because it is missing (a drive not plugged in).
+        const held = (shared("workspace.tree")?.entries ?? []).find(e => e.space === space?.id && e.held)?.folder;
+        const root = shared("workspace.roots")?.[space?.id] || held;
         const folder = root || first?.cwd || space?.folder;
         // A deleted folder makes tab.new fail; then let Herdr pick (focused pane, else home).
         const ok = folder && (await exec("test", ["-d", folder], { on: space.machine }).catch(() => null))?.code === 0;
