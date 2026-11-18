@@ -22,7 +22,7 @@ import { h_flex } from "gpui-base";
 import { notify, theme, props, openOverlay, nextCommand, agents, terminals, hc, run, shared, closeOverlay } from "herdr";
 import {
   AGENTS, config, labeled, inspect, sessionState, resumeNow, forget,
-  agentForApp, recordWithoutHook, refreshPid,
+  agentForApp, recordWithoutHook, refreshPid, folderState,
 } from "./resume.js";
 import { codexSessions, matchCodex } from "./codex.js";
 import { Panel } from "./panel.js";
@@ -55,6 +55,7 @@ export default class AgentResume extends View {
     this.scans = 0;
     this.busy = false;
     this.lastCount = 0; // sessions resumed in the last scan that resumed any
+    this.noted = {}; // "<address>#<pid>" -> its folder was missing and the person was told
     cx.timer.every(SCAN_MS, (cx) => kitOff() || this.scan(cx));
     this.scan(cx);
     // "agent-resume.panel" (a key in keys.json, or herdr-app do) opens the panel.
@@ -213,6 +214,25 @@ export default class AgentResume extends View {
     const now = Date.now();
     if (!this.firstSeen[key]) this.firstSeen[key] = now;
     if (now - this.firstSeen[key] < config().settleMs) return false;
+    // The folder the agent ran in is missing (a drive not plugged in): don't resume it
+    // anywhere else. The labels stay, so it resumes once the folder is back.
+    const cwd = info.labels?.["resume.cwd"];
+    if (cwd) {
+      const state = await folderState(t.address, cwd);
+      if (state === "unknown") return false;
+      if (state === "missing") {
+        if (!this.noted[key]) {
+          this.noted[key] = true;
+          notify({
+            title: `${AGENTS[info.labels["resume.agent"]]?.name ?? "Agent"} not resumed`,
+            body: `${cwd} is missing · waiting for it. Plug the drive back in and it resumes there.`,
+            level: "warning",
+            timeout: 10000,
+          });
+        }
+        return false;
+      }
+    }
     return resumeNow(t.address);
   }
 

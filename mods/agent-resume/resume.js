@@ -7,8 +7,9 @@
 //   resume.pid     = the pid of the shell that ran the agent
 //   resume.args    = the flags of the agent command
 //   resume.tried   = the shell pid of the last resume attempt
+//   resume.cwd     = the folder the agent ran in (written by this mod)
 
-import { terminals, hc, shared, setShared } from "herdr";
+import { terminals, hc, exec, shared, setShared } from "herdr";
 
 // One entry for each agent. app: the program name that the agent reports (status.app).
 // resume: the command with a session id. last: the command without one (the last
@@ -20,7 +21,7 @@ export const AGENTS = {
   opencode: { name: "OpenCode", app: "opencode", resume: "opencode {args} --session {id}", last: "opencode {args} --continue" },
 };
 
-export const LABELS = ["resume.agent", "resume.session", "resume.pid", "resume.args", "resume.tried"];
+export const LABELS = ["resume.agent", "resume.session", "resume.pid", "resume.args", "resume.tried", "resume.cwd"];
 
 export function agentForApp(app) {
   return Object.keys(AGENTS).find((id) => AGENTS[id].app === app) ?? null;
@@ -88,15 +89,34 @@ export function resumeCommand(labels) {
   return template.replace("{args}", args).replace("{id}", id).replace(/\s+/g, " ").trim();
 }
 
+// Shells where `cd '<folder>' && <command>` works.
+const CD_SHELLS = new Set(["bash", "bash.exe", "zsh", "fish", "sh", "dash", "pwsh", "pwsh.exe"]);
+const quote = (path) => `'${path.replace(/'/g, "'\\''")}'`;
+
+// Is the folder the agent ran in there now? "here", "missing" (a drive not plugged in,
+// a deleted folder) or "unknown" (the machine can't be asked).
+export async function folderState(address, cwd) {
+  const on = address.includes("/") ? address.slice(0, address.indexOf("/")) : undefined;
+  const r = await exec("test", ["-d", cwd], { on, timeout: 10000 }).catch(() => null);
+  return r?.code === 0 ? "here" : r?.code === 1 ? "missing" : "unknown";
+}
+
 // Types the resume command in the terminal. It never types into a running agent
-// or into a program that is not a shell. Returns true when it typed.
+// or into a program that is not a shell. A shell that started elsewhere (home, when the
+// folder was missing at restore) goes back to resume.cwd first. Returns true when it typed.
 export async function resumeNow(address) {
   const info = await inspect(address);
   if (!info || info.state !== "live" || info.status) return false;
   const fg = (info.foreground?.name ?? "").toLowerCase();
   if (!SHELLS.has(fg)) return false;
-  const command = resumeCommand(info.labels);
+  let command = resumeCommand(info.labels);
   if (!command) return false;
+  const cwd = info.labels["resume.cwd"];
+  if (cwd && cwd !== info.cwd) {
+    // Never resume in another folder: a shell that can't cd waits.
+    if (/[\x00-\x1f]/.test(cwd) || !CD_SHELLS.has(fg) || (fg.startsWith("pwsh") && cwd.includes("'"))) return false;
+    command = `cd ${quote(cwd)} && ${command}`;
+  }
   // The mark is the shell pid: a failed resume is not tried again in the same shell.
   const mark = await hc(["label", address, `resume.tried=${info.pid}`]);
   if (mark.code !== 0) return false;
@@ -112,11 +132,16 @@ export async function forget(address) {
 
 // An agent runs in this terminal now. If the shell is new (a resume, or an agent started
 // by hand after a reboot), write the new shell pid, so the next reboot is seen.
+// Also records the folder the agent runs in (resume.cwd).
 export async function refreshPid(address) {
   const info = await inspect(address);
   if (!info || !info.status) return false;
-  if (String(info.pid) === info.labels?.["resume.pid"]) return true;
-  const r = await hc(["label", address, `resume.pid=${info.pid}`, "resume.tried="]);
+  const cwd = info.foreground?.cwd || info.cwd;
+  const labels = [];
+  if (String(info.pid) !== info.labels?.["resume.pid"]) labels.push(`resume.pid=${info.pid}`, "resume.tried=");
+  if (cwd && cwd !== info.labels?.["resume.cwd"]) labels.push(`resume.cwd=${cwd}`);
+  if (!labels.length) return true;
+  const r = await hc(["label", address, ...labels]);
   return r.code === 0;
 }
 
@@ -124,6 +149,8 @@ export async function refreshPid(address) {
 export async function recordWithoutHook(address, agentId) {
   const info = await inspect(address);
   if (!info || !info.status || info.labels?.["resume.agent"]) return false;
-  const r = await hc(["label", address, `resume.agent=${agentId}`, "resume.session=", `resume.pid=${info.pid}`, "resume.args=", "resume.tried="]);
+  const cwd = info.foreground?.cwd || info.cwd;
+  const r = await hc(["label", address, `resume.agent=${agentId}`, "resume.session=", `resume.pid=${info.pid}`, "resume.args=", "resume.tried=",
+    ...(cwd ? [`resume.cwd=${cwd}`] : [])]);
   return r.code === 0;
 }
