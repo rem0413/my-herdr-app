@@ -18,6 +18,13 @@ const DEFAULTS = { wake: "manual", after_restart: "ask" };
 const ready = (machine) => machines().find((m) => m.name === (machine ?? null))?.layout === "ready";
 // A space id's machine: "vps/sp1" -> "vps", "sp1" -> null (this computer).
 const spaceMachine = (id) => machineOf(id);
+// Programs not started because their folder is missing (a drive not plugged in).
+const missingNote = (items, body) => ({
+  title: `Folder not found for ${items.map((e) => e.name).join(", ")}`,
+  body: `${[...new Set(items.map((e) => e.cwd))].join(", ")} · ${body}`,
+  level: "warning",
+  timeout: 10000,
+});
 // Any program that isn't an idle agent may hold unsaved work (vim, a build), so it asks first.
 const busy = (e) => !e.parent && (e.kind === "program" || e.status === "working" || e.status === "blocked");
 
@@ -32,6 +39,7 @@ export default class Hibernate extends View {
     this.queue = [];
     this.running = false;
     this.offered = new Set();
+    this.missingNoted = new Set(); // "<address>:<shell pid>" told its folder is missing
     this.sessions = new Map(); // "<address>:<pid>" -> agent session id, see describe()
     // Requests already in shared.json were handled by an earlier run.
     this.seen = shared("hibernate.request")?.nonce ?? null;
@@ -218,12 +226,15 @@ export default class Hibernate extends View {
     const tops = s.items.filter((e) => !e.parent);
     const ok = await Promise.all(tops.map(start));
     // What didn't restart stays asleep, so it can be woken again; a closed terminal is dropped.
-    const left = tops.filter((_, i) => !ok[i]);
+    const left = tops.filter((_, i) => ok[i] !== true && ok[i] !== "gone");
     if (left.length) this.state.sleeping[id] = { ...s, items: left };
     else delete this.state.sleeping[id];
     await this.save();
     this.publish();
-    const skipped = tops.filter((_, i) => ok[i] !== true).map((e) => e.name);
+    const skipped = tops.filter((_, i) => ok[i] === false || ok[i] === "gone").map((e) => e.name);
+    const missing = tops.filter((_, i) => ok[i] === "missing");
+    if (missing.length) notify(missingNote(missing, "It stays asleep: plug the drive back in, then wake it again."));
+    if (missing.length === tops.length) return;
     notify(
       skipped.length
         ? { title: `${s.name} is awake`, body: `Not restarted (busy or closed): ${skipped.join(", ")}`, level: "warning" }
@@ -341,9 +352,18 @@ export default class Hibernate extends View {
   async resume(items, auto) {
     const ok = await Promise.all(items.map(start));
     // A manual resume keeps what failed for hibernate.resume; an automatic one would retry it every pass.
-    const failed = auto ? [] : items.filter((_, i) => !ok[i]);
+    // One whose folder is missing always waits (an automatic resume tries it again each pass).
+    const missing = items.filter((_, i) => ok[i] === "missing");
+    const failed = auto ? missing : items.filter((_, i) => ok[i] !== true && ok[i] !== "gone");
     this.state.pending = [...this.state.pending.filter((p) => !items.some((i) => i.address === p.address)), ...failed];
     await this.save();
+    // Said once per waiting shell, not on every pass.
+    const fresh = missing.filter((p) => !this.missingNoted.has(`${p.address}:${p.shellPid}`));
+    for (const p of fresh) this.missingNoted.add(`${p.address}:${p.shellPid}`);
+    if (fresh.length) notify(missingNote(fresh, auto ? "Waiting: it resumes there once the drive is plugged back in." : "Waiting: plug the drive back in, then run hibernate.resume."));
+    const tried = items.filter((_, i) => ok[i] !== "missing");
+    if (!tried.length) return;
+    items = tried;
     const n = ok.filter((v) => v === true).length;
     notify({ title: auto ? "Resumed after restart" : "Resumed", body: `${n} of ${items.length} program${items.length === 1 ? "" : "s"} started again.`, level: n === items.length ? "success" : "warning" });
   }
