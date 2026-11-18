@@ -142,8 +142,13 @@ export const commandLine = (e) => `cd ${q(e.cwd)} && ${resumeArgv(e).map(q).join
 
 // Starts an entry again in its idle shell; never types into a busy one.
 // Returns true when started, false when it can't start now (busy, no answer),
-// and "gone" when its terminal exited or was killed: that is not resumed.
+// "missing" when its folder isn't there (a drive not plugged in): it waits, never
+// starting elsewhere, and "gone" when its terminal exited or was killed: that is not resumed.
 export async function start(e) {
+  if (e.cwd) {
+    const r = await exec("test", ["-d", e.cwd], { on: machineOf(e.address), timeout: 10000 }).catch(() => null);
+    if (r?.code === 1) return "missing";
+  }
   const g = await get(e.address);
   if (!g) {
     // No answer from the core is not "gone": only a listing without the address is.
