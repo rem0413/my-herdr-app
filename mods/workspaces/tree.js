@@ -1,5 +1,6 @@
 // Workspace tree state kept in shared("workspace.tree"):
-// { entries: [{ id, space, parent, manual, autoParent, dismissed, pinned, folded, color, name, named, folder, machine }],
+// { entries: [{ id, space, parent, manual, autoParent, dismissed, pinned, folded, color, name, named, folder, held, machine }],
+//   held: the folder is missing (a drive not plugged in): kept while its space is elsewhere
 //   reopen: { id, at } | null }
 // `space` is the core space id; an entry whose space is not live is "closed".
 // Pure functions only: callers write results with setShared.
@@ -39,6 +40,8 @@ function keeper(entries, ids, parentOf = storedParent) {
 // `readable(machine)`: false/throwing means that machine's spaces are unknown, so its
 // closed entries are kept. A reopen marker adopts a new space only when machine and
 // folder (name when the entry has no folder) match and exactly one new space qualifies.
+// `hold(entry, space)`: true keeps the entry's folder when the space is somewhere else now
+// (its terminal fell back home because the folder is missing). Back in it, the hold ends.
 const sameMachine = (a, b) => (a ?? null) === (b ?? null);
 const same = (a, b) => a !== undefined && a !== null && a === b;
 const isReadable = (readable, machine) => {
@@ -49,7 +52,7 @@ const isReadable = (readable, machine) => {
 	}
 };
 
-export function reconcile(state, spaces, readable = () => true, now = Date.now()) {
+export function reconcile(state, spaces, readable = () => true, now = Date.now(), hold = () => false) {
 	if (!Array.isArray(spaces) || !spaces.length) return state;
 	const entries = state.entries.map((entry) => ({ ...entry }));
 	const ids = new Set(spaces.map((space) => space.id));
@@ -75,7 +78,13 @@ export function reconcile(state, spaces, readable = () => true, now = Date.now()
 	}
 	for (const space of spaces) {
 		const info = { name: space.name, named: space.named, folder: space.folder, machine: space.machine ?? null };
-		for (const entry of entries) if (entry.space === space.id) Object.assign(entry, info), delete entry.dismissed;
+		for (const entry of entries) {
+			if (entry.space !== space.id) continue;
+			const held = entry.folder != null && entry.folder !== space.folder && hold(entry, space);
+			Object.assign(entry, info, held ? { folder: entry.folder } : {});
+			if (!held) delete entry.held;
+			delete entry.dismissed;
+		}
 	}
 	// Drop closed leaves nothing keeps (pin, an open parent); every ancestor of a retained entry stays.
 	const kept = keeper(entries, ids);

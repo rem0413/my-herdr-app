@@ -116,6 +116,15 @@ assert.equal(t.entries.find((e) => e.id === "p").space, "p");
 assert.equal(t.entries.length, 4);
 t = reconcile(s, [sp("o"), sp("p2", "p", "vps")], () => true, 1500);
 assert.equal(t.entries.find((e) => e.id === "p").space, "p");
+// A held folder survives the space moving elsewhere; back in it (or not held), it follows the space.
+s = reconcile(EMPTY, [sp("h")]);
+t = reconcile(s, [{ ...sp("h"), folder: "/home" }], () => true, 0, () => true);
+assert.equal(t.entries[0].folder, "/w/h");
+t = reconcile({ ...t, entries: [{ ...t.entries[0], held: true }] }, [sp("h")], () => true, 0, () => true);
+assert.equal(t.entries[0].folder, "/w/h");
+assert.equal(t.entries[0].held, undefined);
+t = reconcile(s, [{ ...sp("h"), folder: "/home" }]);
+assert.equal(t.entries[0].folder, "/home");
 // Duplicate space ids in the live list create one entry.
 t = reconcile(EMPTY, [sp("d"), sp("d")]);
 assert.equal(t.entries.length, 1);

@@ -8,7 +8,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, machines, panes, agents, terminals, knownAgents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout, checking, appHome } from "herdr";
+import { spaces, machines, panes, agents, terminals, knownAgents, focused, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout, checking, appHome, notify } from "herdr";
 import { EMPTY, canParent, descendants, dismiss, flatten, reconcile, rememberAutoParents, setColor, setParent, startReopen, toggleFold, togglePin } from "./tree.js";
 import { PRStatusObserver, prAppearance } from "./pr-status.js";
 import { DIR, READ, WRITE, applyFile, fileOf, parseFile, treeKey } from "./tree-sync.js";
@@ -118,12 +118,20 @@ export function listTabs(t, on, agentKeys = new Set()) {
   return h_flex().gap(2).child(tab("spaces", "Spaces", 0)).child(tab("agents", "Agents", count));
 }
 
+// Said when a space's folder is missing (an external drive not plugged in): nothing moves.
+const missingNote = (folder, body) => notify({ title: "Folder not found", body: `${folder} · ${body}`, level: "warning", timeout: 8000 });
+
 // A closed entry comes back as a new space (a fresh shell) where it was, on its machine.
 // The tree adopts that space into the same entry, so its parent, children and pin stay.
-function reopen(state, entry) {
+// A missing folder opens nothing (never a shell elsewhere): the entry waits for it.
+async function reopen(state, entry) {
+  if (entry.folder) {
+    const r = await exec("test", ["-d", entry.folder], { on: entry.machine ?? undefined, timeout: 10000 }).catch(() => null);
+    if (r?.code === 1) return missingNote(entry.folder, "kept as it is. Plug the drive back in, then open it again.");
+  }
   const args = { machine: entry.machine ?? "" };
   if (entry.folder) args.folder = entry.folder;
-  if (entry.named) args.name = entry.name;
+  if (entry.named && !entry.autoName) args.name = entry.name;
   setShared("workspace.tree", startReopen(state, entry.id));
   run("space.new", args);
 }
@@ -195,6 +203,9 @@ export default class Spaces extends View {
     this.treeLocalDue = true; // this computer's file changed (or isn't watched yet)
     this.treeWatched = false;
     this.wasActive = false;
+    // Live spaces now elsewhere than their entry's folder: entry id + folder -> { state, at },
+    // "checking" or "present" (see holdFolder).
+    this.folderCheck = new Map();
     if (checking()) return;
     cx.timer.every(2000, (cx) => this.syncTreeFiles(cx));
     cx.spawn(async () => this.watchTreeFile());
@@ -204,7 +215,8 @@ export default class Spaces extends View {
 
   // A closed entry whose folder is gone (a removed worktree) can't be reopened: dismiss it,
   // so it leaves the tree (a pin still keeps it). Asked once per closed entry, on its machine;
-  // only a clear "not a folder" counts, never an unreachable machine.
+  // only a clear "not a folder" counts, never an unreachable machine. A folder whose parent
+  // is gone too (a drive not plugged in) is kept: it comes back with the drive.
   dropGoneFolders(cx) {
     const live = new Set(spaces().map((s) => s.id));
     const ready = (m) => (m === null ? true : machines().find((x) => x.name === m)?.layout === "ready");
@@ -217,8 +229,9 @@ export default class Spaces extends View {
     cx.spawn(async () => {
       const missing = [];
       for (const e of gone) {
-        const r = await exec("test", ["-d", e.folder], { on: e.machine ?? undefined, timeout: 10000 }).catch(() => null);
-        if (r?.code === 1) missing.push(e.id);
+        const r = await exec("sh", ["-c", 'test -d "$1" && echo here || { test -d "$(dirname "$1")" && echo gone || echo away; }', "sh", e.folder],
+          { on: e.machine ?? undefined, timeout: 10000 }).catch(() => null);
+        if (r?.code === 0 && r.stdout.trim() === "gone") missing.push(e.id);
       }
       if (!missing.length) return;
       let next = shared("workspace.tree") ?? this.tree;
@@ -510,7 +523,7 @@ export default class Spaces extends View {
       openOverlay({ mod: "worktree", kind: "dialog", ...(action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: { space: menu.space, action } });
     };
     return [
-      ...(menu.space ? [] : [["Open", "terminal", () => { closeOverlay(props().overlay); reopen(state, entry); }]]),
+      ...(menu.space ? [] : [["Open", "terminal", (cx) => cx.spawn(async () => { await reopen(state, entry); closeOverlay(props().overlay); })]]),
       [entry.pinned ? "Unpin" : "Pin", entry.pinned ? "pin-off" : "pin", () => done(togglePin(state, entry.id))],
       ["Set parent…", "git-branch", () => { this.menuView = "parent"; this.at = 0; }],
       ["Tag…", `color:${colorOf(entry)}`, () => { this.menuView = "color"; this.at = 0; }, tagName(colorOf(entry))],
@@ -549,6 +562,16 @@ export default class Spaces extends View {
       const path = this.rootInput.value().trim().replace(/\/+$/, "");
       if (path) roots[space] = path; else delete roots[space];
       setShared("workspace.roots", roots);
+      // A root set here also ends a held (missing) folder: the entry takes the new root,
+      // or follows its space again when emptied.
+      const tree = shared("workspace.tree") ?? EMPTY;
+      if (tree.entries.some((e) => e.space === space && e.held)) {
+        setShared("workspace.tree", { ...tree, entries: tree.entries.map((e) => {
+          if (e.space !== space || !e.held) return e;
+          const { held: _, ...rest } = e;
+          return path ? { ...rest, folder: path } : rest;
+        }) });
+      }
       closeOverlay(props().overlay);
     });
     this.rootInput.focus();
@@ -570,7 +593,7 @@ export default class Spaces extends View {
     }
     const list = this.menuItems();
     const pick = (i, cx) => {
-      list[i]?.[2]();
+      list[i]?.[2](cx);
       cx.notify();
     };
     return v_flex()
@@ -614,7 +637,7 @@ export default class Spaces extends View {
   }
 
   // Tree state: shared("workspace.tree"), kept in step with the live spaces.
-  syncTree() {
+  syncTree(cx) {
     const ps = panes();
     const live = spaces().map((s) => ({ id: s.id, name: s.name, named: s.named, machine: s.machine, folder: place(s, ps) }));
     const saved = shared("workspace.tree") ?? EMPTY;
@@ -623,9 +646,55 @@ export default class Spaces extends View {
       const k = machines().find((x) => x.name === m);
       return k ? k.layout === "ready" : m === null;
     };
-    this.tree = reconcile(saved, live, readable);
+    this.tree = reconcile(saved, live, readable, Date.now(), (entry) => this.holdFolder(entry, cx));
+    this.releaseNames();
     if (JSON.stringify(this.tree) !== JSON.stringify(saved)) setShared("workspace.tree", this.tree);
     this.closeDone(readable);
+  }
+
+  // A live space is somewhere else than its entry's folder (a cd, or a shell that started at
+  // home because the folder is missing). Keep the folder until it is known to be there: a
+  // missing one stays held (entry.held) until the space is back in it or a root is set.
+  holdFolder(entry, cx) {
+    if (entry.held) return true;
+    const key = `${entry.id}\0${entry.folder}`;
+    const seen = this.folderCheck.get(key);
+    const now = Date.now();
+    if (seen && now - seen.at < 30000) return seen.state === "checking";
+    if (!cx || checking()) return false;
+    this.folderCheck.set(key, { state: "checking", at: now });
+    cx.spawn(async (cx) => {
+      const r = await exec("test", ["-d", entry.folder], { on: entry.machine ?? undefined, timeout: 10000 }).catch(() => null);
+      if (r?.code === 0) this.folderCheck.set(key, { state: "present", at: Date.now() });
+      if (r?.code !== 1) return cx.notify(); // here, or unknown (asked again in 30 s)
+      this.folderCheck.delete(key);
+      // An unnamed space would be called "~" now: name it after its folder, as before.
+      const space = spaces().find((s) => s.id === entry.space);
+      const autoName = space && !space.named ? base(entry.folder) : null;
+      if (autoName) run("space.rename", { id: entry.space, name: autoName });
+      const tree = shared("workspace.tree") ?? this.tree;
+      const next = { ...tree, entries: tree.entries.map((e) => (e.id === entry.id && e.folder === entry.folder
+        ? { ...e, held: true, ...(autoName ? { autoName } : {}) } : e)) };
+      setShared("workspace.tree", (this.tree = next));
+      missingNote(entry.folder, "the space keeps it as its folder. Plug the drive back in, or right-click the space → Root folder… to change it.");
+    });
+    return true;
+  }
+
+  // A hold ended (back in the folder, or a root set): a name holdFolder gave the space goes,
+  // so Herdr names it again. A name the person changed meanwhile stays theirs.
+  releaseNames() {
+    const done = this.tree.entries.filter((e) => e.autoName && !e.held);
+    if (!done.length) return;
+    const live = new Map(spaces().map((s) => [s.id, s]));
+    for (const e of done) if (live.get(e.space)?.name === e.autoName) run("space.rename", { id: e.space, name: "" });
+    const ids = new Set(done.map((e) => e.id));
+    this.tree = { ...this.tree, entries: this.tree.entries.map((e) => {
+      if (!ids.has(e.id)) return e;
+      const { autoName: _, ...rest } = e;
+      return rest;
+    }) };
+    setShared("workspace.tree", this.tree);
   }
 
   // Spaces closed from the menu (closeWithChildren) that are gone now.
@@ -967,7 +1036,7 @@ export default class Spaces extends View {
         let kid = null;
         for (let i = at + 1; at >= 0 && i < rows.length && rows[i].depth > rows[at].depth; i++) if (live.has(rows[i].space)) { kid = rows[i].space; break; }
         if (kid) run("space.select", { id: kid });
-        else reopen(this.tree, r.entry);
+        else { const tree = this.tree; cx.spawn(async () => reopen(tree, r.entry)); }
       }
       else run("space.select", { id: r.w.id });
     } else if (id) {
@@ -1062,7 +1131,7 @@ export default class Spaces extends View {
   render(cx) {
     if (props()?.menu) return this.renderMenu();
     this.checkNew(cx, false);
-    this.syncTree();
+    this.syncTree(cx);
     const t = theme();
     const collapsed = narrow();
     // Herdr's shared space colors: every mod drawing space avatars reads and fills "space.colors".
