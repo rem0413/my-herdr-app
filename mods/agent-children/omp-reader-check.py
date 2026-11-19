@@ -1,4 +1,4 @@
-"""Run with python3 mods/workspace-agents/omp-reader-check.py."""
+"""Run with python3 mods/agent-children/omp-reader-check.py."""
 import importlib.util
 import json
 from pathlib import Path

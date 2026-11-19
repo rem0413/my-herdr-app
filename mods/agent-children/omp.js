@@ -4,12 +4,12 @@ import * as fs from "fs/promises";
 // The request goes through a file, not argv: its state grows with every session read
 // (tasks included), and argv is both size-limited and visible to `ps`.
 export async function readOmp(request) {
-  const dir = `${appHome()}/data/workspace-agents`;
+  const dir = `${appHome()}/data/agent-children`;
   const file = `${dir}/omp-request-${Date.now()}-${Math.random().toString(36).slice(2)}.json`;
   await fs.mkdir(dir, { recursive: true }).catch(() => {});
   await fs.writeFile(file, JSON.stringify(request));
   try {
-    const result = await exec("python3", [`${appHome()}/mods/workspace-agents/omp-reader.py`, file]);
+    const result = await exec("python3", [`${appHome()}/mods/agent-children/omp-reader.py`, file]);
     const data = JSON.parse(result.stdout);
     if (data.error) throw new Error(data.error);
     return data;

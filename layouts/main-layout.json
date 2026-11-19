@@ -228,6 +228,16 @@
       "size": {
         "px": 0
       }
+    },
+    {
+      "id": "agent-children",
+      "type": "block",
+      "content": {
+        "mod": "agent-children"
+      },
+      "size": {
+        "px": 0
+      }
     }
   ],
   "divider": {

@@ -6,8 +6,8 @@ import * as fs from "fs/promises";
 
 const LOCAL_MS = 2000;
 const REMOTE_MS = 5000;
-const NATIVE = "mods/workspace-agents/native-children.py";
-const OMP = "mods/workspace-agents/omp-reader.py";
+const NATIVE = "mods/agent-children/native-children.py";
+const OMP = "mods/agent-children/omp-reader.py";
 
 function kindOf(a) {
   const key = `${a.app ?? ""} ${a.program?.key ?? ""}`;
